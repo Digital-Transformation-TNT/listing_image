@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, Signal, QSize
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QFrame, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog,
-    QDialog, QPlainTextEdit, QDialogButtonBox, QWidget,
+    QDialog, QPlainTextEdit, QDialogButtonBox, QWidget, QScrollArea,
 )
 
 from ui_listing import theme
@@ -58,10 +58,29 @@ class ImagePicker(QFrame):
         self.preview.setStyleSheet(
             f"border:1px dashed {theme.BORDER}; border-radius:8px; color:{theme.TEXT_MUTED};")
         lay.addWidget(self.preview)
+
+        # multiple: danh sách ảnh đã chọn (thumbnail nhỏ + tên + nút ✕ xóa riêng)
+        self.list_area = None
+        self.list_host = None
+        self.list_layout = None
+        if multiple:
+            self.list_area = QScrollArea()
+            self.list_area.setWidgetResizable(True)
+            self.list_area.setMaximumHeight(190)
+            self.list_area.setFrameShape(QFrame.NoFrame)
+            self.list_host = QWidget()
+            self.list_layout = QVBoxLayout(self.list_host)
+            self.list_layout.setContentsMargins(0, 0, 0, 0)
+            self.list_layout.setSpacing(4)
+            self.list_layout.setAlignment(Qt.AlignTop)
+            self.list_area.setWidget(self.list_host)
+            self.list_area.setVisible(False)
+            lay.addWidget(self.list_area)
+
         row = QHBoxLayout()
         self.btn = QPushButton("Chọn ảnh")
         self.btn.clicked.connect(self._pick)
-        self.btn_clear = QPushButton("Xóa")
+        self.btn_clear = QPushButton("Xóa tất cả" if multiple else "Xóa")
         self.btn_clear.clicked.connect(self._clear)
         row.addWidget(self.btn)
         row.addWidget(self.btn_clear)
@@ -101,26 +120,84 @@ class ImagePicker(QFrame):
                 self.paths.append(f)
         self._render()
 
+    def remove_path(self, f: str):
+        """Xóa 1 ảnh cụ thể khỏi danh sách (nút ✕ của từng ảnh)."""
+        if f in self.paths:
+            self.paths.remove(f)
+            self._render()
+
     def _render(self):
-        n = len(self.paths)
-        if n == 0:
+        if self.multiple:
+            self._render_multi()
+        else:
+            self._render_single()
+        self.changed.emit()
+
+    def _render_single(self):
+        if not self.paths:
             self.preview.clear()
             self.preview.setText("Chưa chọn")
+            self.preview.setToolTip("")
+            return
+        pm = _thumb(self.paths[0], 220, 120)
+        if not pm.isNull():
+            self.preview.setPixmap(pm)
+        self.preview.setText("")
+
+    def _render_multi(self):
+        n = len(self.paths)
+        # ô preview trên cùng: nhắc số lượng, hoặc lời mời kéo-thả khi trống
+        self.preview.setPixmap(QPixmap())
+        if n == 0:
+            self.preview.setText("Kéo-thả nhiều ảnh vào đây\nhoặc bấm Chọn ảnh")
         else:
-            pm = _thumb(self.paths[0], 220, 120)
-            if not pm.isNull():
-                self.preview.setPixmap(pm)
-            self.preview.setText("" if n == 1 else f"+{n - 1} ảnh khác")
-            if n > 1:
-                self.preview.setToolTip("\n".join(Path(p).name for p in self.paths))
-        self.changed.emit()
+            self.preview.setText(f"Đã chọn {n} ảnh — bấm ✕ để bỏ ảnh thêm nhầm")
+        # dựng lại danh sách hàng
+        while self.list_layout.count():
+            it = self.list_layout.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+        for i, p in enumerate(self.paths):
+            self.list_layout.addWidget(self._make_row(i, p))
+        self.list_area.setVisible(n > 0)
+
+    def _make_row(self, idx: int, path: str) -> QWidget:
+        row = QFrame()
+        row.setObjectName("Card")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(6, 4, 6, 4)
+        h.setSpacing(8)
+        # thumbnail nhỏ
+        thumb = QLabel()
+        thumb.setFixedSize(44, 44)
+        thumb.setAlignment(Qt.AlignCenter)
+        pm = _thumb(path, 44, 44)
+        if not pm.isNull():
+            thumb.setPixmap(pm)
+        else:
+            thumb.setText("?")
+        h.addWidget(thumb)
+        # tên file (rút gọn nếu dài) + số thứ tự
+        name = QLabel(f"{idx + 1}. {Path(path).name}")
+        name.setToolTip(path)
+        name.setWordWrap(False)
+        try:
+            name.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        except Exception:
+            pass
+        h.addWidget(name, 1)
+        # nút xóa riêng ảnh này
+        btn = QPushButton("✕")
+        btn.setFixedWidth(30)
+        btn.setToolTip("Bỏ ảnh này")
+        btn.clicked.connect(lambda _=False, f=path: self.remove_path(f))
+        h.addWidget(btn)
+        return row
 
     def _clear(self):
         self.paths = []
-        self.preview.clear()
-        self.preview.setText("Chưa chọn")
-        self.preview.setToolTip("")
-        self.changed.emit()
+        self._render()
 
     # --- kéo-thả ảnh ---
     def _image_urls(self, md):
