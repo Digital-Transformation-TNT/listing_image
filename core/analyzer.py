@@ -69,6 +69,20 @@ TYPE_STYLE = {
     "features": "Bố cục 3-4 TÍNH NĂNG nổi bật quanh sản phẩm, mỗi tính năng 1 icon + 1 cụm từ ngắn; layout gọn gàng, không rối.",
     "how_to_use": "CÁC BƯỚC sử dụng sản phẩm (vd apply → wait → rinse hoặc thao tác thật), đánh số bước, minh hoạ thao tác ĐÚNG CÁCH; chữ ngắn.",
     "detail_info": "CẬN CẢNH chi tiết/chất liệu/kết cấu/thành phần sản phẩm (macro rõ nét); có thẻ thông số kỹ thuật hoặc thành phần trình bày rõ ràng.",
+    "product_info": (
+        "ẢNH INFOGRAPHIC 'THÔNG TIN SẢN PHẨM' (product information sheet) bố cục "
+        "rõ ràng như tờ thông số, KHÔNG phải ảnh chụp lifestyle. Bố cục từ trên "
+        "xuống: (1) TIÊU ĐỀ lớn in đậm ở đầu (vd 'PRODUCT INFORMATION'); (2) khối "
+        "giữa gồm ẢNH SẢN PHẨM CHÍNH đặt trong khung bo tròn, có ĐƯỜNG ĐO KÍCH "
+        "THƯỚC (mũi tên + số đo chiều rộng & chiều cao kèm đơn vị cm) chú thích "
+        "cạnh sản phẩm; BÊN CẠNH là CỘT các BIẾN THỂ (mỗi màu/mùi 1 ảnh nhỏ + tên "
+        "biến thể ghi rõ); (3) khối DANH SÁCH THÔNG SỐ gạch đầu dòng: Tên sản phẩm, "
+        "Mùi hương/biến thể, Quy cách/khối lượng, Thành phần chính; (4) DÒNG LƯU Ý "
+        "nhỏ (chữ nghiêng) ở đáy về cách dùng/an toàn. Nền pastel sạch theo theme, "
+        "khung bo góc mềm, chữ dễ đọc trên điện thoại. CHỈ dùng thông tin THẬT từ "
+        "thuộc tính/nhãn/thông tin người dùng cung cấp, TUYỆT ĐỐI KHÔNG bịa số đo/"
+        "khối lượng/thành phần; trường nào không biết thì BỎ, không ghi 'đang cập nhật'."
+    ),
     "audience": "ĐỐI TƯỢNG phù hợp / TÌNH HUỐNG sử dụng thực tế (ai dùng, dùng ở đâu); người và không gian hợp ngữ cảnh; text nêu nhóm đối tượng.",
     "closing": "Ảnh CHỐT SALE/tạo niềm tin: kết quả 'như ngoài tiệm tại nhà', CTA ngắn (vd 'Order now') + điểm tin cậy; bố cục mạnh, thúc đẩy mua.",
 }

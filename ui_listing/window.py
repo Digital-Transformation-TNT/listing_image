@@ -167,7 +167,8 @@ class MainWindow(QMainWindow):
         cl.addWidget(self._labeled("Mô tả sản phẩm", self.ed_info))
 
         grid = QGridLayout()
-        self.sp_qty = QSpinBox(); self.sp_qty.setRange(1, 9); self.sp_qty.setValue(9)
+        _nmax = len(PROMPT_TYPES)   # số loại ảnh hiện có (tự co giãn khi thêm loại)
+        self.sp_qty = QSpinBox(); self.sp_qty.setRange(1, _nmax); self.sp_qty.setValue(_nmax)
         self.cb_lang = QComboBox(); self.cb_lang.addItems(["en", "vi"])
         self.sp_conc = QSpinBox(); self.sp_conc.setRange(1, 6); self.sp_conc.setValue(DEFAULT_CONCURRENCY)
         grid.addWidget(QLabel("Số ảnh"), 0, 0); grid.addWidget(self.sp_qty, 1, 0)

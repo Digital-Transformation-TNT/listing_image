@@ -101,7 +101,8 @@ LOGIC = (
 _MODEST = "Modest, fully appropriate commercial advertising photography."
 
 # Các loại ảnh NÊN khoe nhiều màu/biến thể cùng lúc (thay vì 1 màu).
-SHOW_ALL_VARIANTS_TYPES = {"thumbnail", "features", "audience"}
+# product_info = tờ thông tin có cột biến thể → phải thấy đủ các màu/mùi.
+SHOW_ALL_VARIANTS_TYPES = {"thumbnail", "features", "audience", "product_info"}
 
 
 def _variant_note(p_type: str, variant_index: int, n_products: int) -> str:

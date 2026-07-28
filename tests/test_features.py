@@ -111,5 +111,21 @@ res2 = {"type": "x", "status": "success"}          # ảnh cũ chưa có profile
 edit_profile2 = res2.get("profile") or "dropdown"
 check("ảnh cũ thiếu profile → fallback dropdown", edit_profile2 == "dropdown")
 
+# --------------------------------------------------------------------------- #
+print("== loại ảnh mới: thông tin sản phẩm (infographic) ==")
+from config import PROMPT_TYPE_KEYS, DEFAULT_TYPES, PROMPT_TYPE_LABELS  # noqa: E402
+from core.analyzer import TYPE_STYLE  # noqa: E402
+check("có loại 'product_info'", "product_info" in PROMPT_TYPE_KEYS)
+check("bật mặc định", "product_info" in DEFAULT_TYPES)
+check("có nhãn tiếng Việt", "product_info" in PROMPT_TYPE_LABELS)
+check("có style mô tả infographic",
+      "INFOGRAPHIC" in TYPE_STYLE.get("product_info", ""))
+check("style nhắc số đo kích thước + biến thể",
+      "KÍCH THƯỚC" in TYPE_STYLE["product_info"]
+      and "BIẾN THỂ" in TYPE_STYLE["product_info"])
+check("style cấm bịa thông số", "KHÔNG bịa" in TYPE_STYLE["product_info"])
+check("product_info khoe đủ biến thể (SHOW_ALL)",
+      "product_info" in SHOW_ALL_VARIANTS_TYPES)
+
 print(f"\n==> {len(PASS)} passed, {len(FAIL)} failed / {len(PASS) + len(FAIL)} total")
 sys.exit(1 if FAIL else 0)

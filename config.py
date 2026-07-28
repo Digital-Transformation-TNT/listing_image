@@ -113,6 +113,7 @@ PROMPT_TYPES = [
     ("features", "Tính năng nổi bật"),
     ("how_to_use", "Cách sử dụng"),
     ("detail_info", "Chi tiết / chất liệu / thành phần"),
+    ("product_info", "Thông tin sản phẩm (infographic)"),
     ("audience", "Đối tượng / tình huống dùng"),
     ("closing", "Chốt sale / tạo niềm tin"),
 ]
