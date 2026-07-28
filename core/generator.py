@@ -308,7 +308,9 @@ async def generate_one(
             await session.new_chat()
             await session.upload_images(refs)
             await session.type_prompt(final_prompt)
-            await session.send()
+            if not await session.send():
+                last_err = "send failed"   # gửi hụt → thử lại lượt mới, không chờ mòn
+                continue
             await session.page.wait_for_timeout(600)
             src = await session.wait_for_image(timeout_ms=timeout_ms)
             if not src:

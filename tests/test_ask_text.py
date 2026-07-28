@@ -40,7 +40,8 @@ class FakeLocator:
         return self
 
     async def click(self):
-        pass
+        if "send-button" in self.sel:
+            self.page.on_send()
 
     async def wait_for(self, **kw):
         pass
@@ -56,8 +57,12 @@ class FakeLocator:
 
 
 class FakeKeyboard:
+    def __init__(self, page):
+        self.page = page
+
     async def press(self, k):
-        pass
+        if k == "Enter":
+            self.page.typed = ""       # Enter = gửi → ô soạn trống
 
     async def insert_text(self, t):
         pass
@@ -73,12 +78,15 @@ class FakePage:
         self.script = script
         self.tick = 0
         self.url = "https://chatgpt.com/"
-        self.keyboard = FakeKeyboard()
+        self.keyboard = FakeKeyboard(self)
         self.typed = ""
 
     # -- API Playwright mà AioSession dùng -- #
     def on(self, *a, **kw):
         pass
+
+    def on_send(self):
+        self.typed = ""                # bấm nút gửi → ô soạn trống
 
     def locator(self, sel):
         return FakeLocator(self, sel)
@@ -99,13 +107,15 @@ class FakePage:
             if "length" in js and "innerText" not in js:
                 return len(texts)
             return texts[-1] if texts else ""
-        if "getBoundingClientRect" in js:
+        if "aria-disabled" in js or "b.disabled" in js:  # _send_ready → luôn sẵn sàng
+            return True
+        if "getBoundingClientRect" in js:                 # _is_generating
             return generating
         if "ClipboardEvent" in js:
             self.typed = arg
             return None
         if "prompt-textarea" in js:
-            return self.typed          # xác nhận đã gõ đúng
+            return self.typed          # xác nhận đã gõ đúng / _composer_text
         return None
 
 
@@ -171,8 +181,9 @@ async def _with_net():
     orig = sess.send
 
     async def send():
-        await orig()
+        ok = await orig()
         sess._net_done += 1             # mạng đóng ngay sau khi gửi
+        return ok                       # PHẢI trả bool để ask_text biết đã gửi
     sess.send = send
     return await sess.ask_text("x", timeout_ms=20000)
 

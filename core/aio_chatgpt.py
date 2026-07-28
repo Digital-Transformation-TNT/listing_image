@@ -47,6 +47,10 @@ class StopRequested(Exception):
     """User bấm Dừng."""
 
 
+class SendError(Exception):
+    """Không gửi được tin nhắn (nút gửi không sẵn sàng / UI đổi)."""
+
+
 class AioSession:
     """Bọc 1 tab đã đăng nhập để thao tác tạo ảnh / hỏi text."""
 
@@ -194,18 +198,76 @@ class AioSession:
             await self.page.keyboard.press("Delete")
             await self.page.keyboard.insert_text(clean)
 
-    async def send(self) -> None:
+    async def _composer_text(self) -> str:
+        try:
+            return await self.page.evaluate(
+                "() => (document.querySelector('#prompt-textarea')||{}).innerText || ''"
+            )
+        except Exception:
+            return ""
+
+    async def _send_ready(self) -> bool:
+        """Nút gửi ĐÃ SẴN SÀNG chưa? False khi ảnh còn upload (nút bị disabled).
+
+        Đây là mấu chốt: bấm gửi lúc ảnh CHƯA upload xong (nút disabled) → click
+        trượt, tin nhắn không đi → ChatGPT không trả lời → treo tới hết timeout."""
+        try:
+            return await self.page.evaluate(
+                """(sel) => {
+                    const b = document.querySelector(sel);
+                    if (!b) return false;
+                    if (b.disabled || b.getAttribute('aria-disabled') === 'true')
+                        return false;
+                    const r = b.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                }""",
+                SEL_SEND_BTN,
+            )
+        except Exception:
+            return False
+
+    async def send(self) -> bool:
+        """Gửi tin nhắn và XÁC NHẬN đã gửi thật (ô soạn trống đi). Trả True/False.
+
+        Chờ nút gửi SẴN SÀNG (tức ảnh đã upload xong) rồi mới bấm; sau khi bấm
+        kiểm tra ô soạn đã trống → chắc chắn tin đã đi. Thử lại vài lần. Nhờ vậy
+        không còn cảnh 'gõ xong mà không gửi được → treo mãi'."""
         self._net_mark = self._net_done   # mốc để biết luồng trả lời NÀY đã xong
         self.http_error = 0               # lỗi cũ không được ảnh hưởng lượt này
-        btn = self.page.locator(SEL_SEND_BTN)
-        try:
-            await btn.wait_for(state="visible", timeout=5000)
-            await btn.click()
-            return
-        except PWTimeout:
-            pass
-        await self.page.locator(SEL_COMPOSER).click()
-        await self.page.keyboard.press("Enter")
+
+        # 1) chờ nút gửi sẵn sàng (bao gồm chờ ảnh upload xong) — tối đa ~45s
+        ready_deadline = time.time() + 45
+        while time.time() < ready_deadline:
+            self._stop()
+            if await self._send_ready():
+                break
+            await self.page.wait_for_timeout(400)
+
+        # 2) gửi + xác nhận đã gửi (ô soạn trống / bắt đầu sinh / luồng mạng chạy)
+        for _ in range(6):
+            self._stop()
+            if not (await self._composer_text()).strip():
+                return True                      # ô đã trống = đã gửi
+            try:
+                if await self._send_ready():
+                    await self.page.locator(SEL_SEND_BTN).first.click()
+                else:
+                    await self.page.locator(SEL_COMPOSER).click()
+                    await self.page.keyboard.press("Enter")
+            except Exception:
+                try:
+                    await self.page.locator(SEL_COMPOSER).click()
+                    await self.page.keyboard.press("Enter")
+                except Exception:
+                    pass
+            for _ in range(12):                  # chờ xác nhận ~3s mỗi lần bấm
+                await self.page.wait_for_timeout(250)
+                self._stop()
+                if not (await self._composer_text()).strip():
+                    return True
+                if self.stream_finished() or await self._is_generating():
+                    return True
+        return False
 
     # ------------------------------------------------------------------ #
     async def ask_text(self, prompt: str, timeout_ms: int = 180000) -> str:
@@ -217,7 +279,10 @@ class AioSession:
         self._stop()
         before = await self._assistant_count()
         await self.type_prompt(prompt)
-        await self.send()
+        if not await self.send():
+            # Không gửi được (ảnh chưa upload xong / UI đổi) → báo lỗi NGAY để
+            # caller retry, thay vì chờ mòn hết timeout rồi trả rỗng.
+            raise SendError("Không gửi được tin nhắn (nút gửi không sẵn sàng).")
 
         end = time.time() + timeout_ms / 1000
         # (1) chờ có LƯỢT TRẢ LỜI MỚI
@@ -406,7 +471,8 @@ class AioSession:
         if extra_images:
             await self.upload_images([Path(p) for p in extra_images])
         await self.type_prompt(prompt)
-        await self.send()
+        if not await self.send():
+            return None
         await self.page.wait_for_timeout(800)
         return await self.wait_for_image(timeout_ms=timeout_ms, baseline=baseline)
 

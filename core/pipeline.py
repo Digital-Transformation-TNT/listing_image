@@ -538,7 +538,8 @@ async def edit_image(
         prompt = build_edit_prompt(edit_prompt, has_ref=bool(extra_images))
         baseline = set(await s.generated_srcs())
         await s.type_prompt(prompt)
-        await s.send()
+        if not await s.send():
+            return None
         await s.page.wait_for_timeout(800)
         src = await s.wait_for_image(timeout_ms=240000, baseline=baseline)
         if not src:
