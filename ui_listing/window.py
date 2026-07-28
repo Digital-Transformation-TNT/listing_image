@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QLineEdit, QPlainTextEdit,
     QSpinBox, QComboBox, QCheckBox, QVBoxLayout, QHBoxLayout, QGridLayout,
     QFrame, QTabWidget, QProgressBar, QScrollArea, QSplitter, QMessageBox,
-    QSizePolicy, QRadioButton, QButtonGroup,
+    QSizePolicy, QRadioButton, QButtonGroup, QFileDialog,
 )
 
 from config import (
@@ -46,6 +47,7 @@ class MainWindow(QMainWindow):
         self.edit_workers = []
         self.results = []
         self.session_dir = None
+        self._last_save_dir = None  # nhớ thư mục tải gần nhất cho lần sau
         self.analysis = {}          # {attributes, theme, seo, prompts}
         self.prompt_boxes = {}      # {type: QPlainTextEdit}
         self._syncing = False
@@ -134,7 +136,11 @@ class MainWindow(QMainWindow):
         lay.addWidget(acc)
 
         # --- ẢNH ---
-        self.pick_product = ImagePicker("Ảnh sản phẩm", required=True)
+        # Cho phép NHIỀU ảnh sản phẩm: cùng 1 sản phẩm, khác mẫu mã/màu sắc.
+        self.pick_product = ImagePicker("Ảnh sản phẩm", required=True, multiple=True)
+        self.pick_product.setToolTip(
+            "Có thể chọn nhiều ảnh nếu sản phẩm có nhiều mẫu mã/màu (chức năng "
+            "giống nhau). App sẽ hiểu đó là cùng một sản phẩm.")
         self.pick_person = ImagePicker("Ảnh người mẫu (tùy chọn)")
         self.pick_scene = ImagePicker("Ảnh bối cảnh (tùy chọn)")
         lay.addWidget(self.pick_product)
@@ -171,6 +177,10 @@ class MainWindow(QMainWindow):
 
         self.chk_hidden = QCheckBox("Chạy ngầm (không hiện Chrome — vẫn làm việc khác được)")
         self.chk_hidden.setChecked(True)
+        self.chk_hidden.setToolTip(
+            "Windows: cửa sổ Chrome nằm ngoài màn hình.\n"
+            "macOS: macOS không cho đẩy cửa sổ ra ngoài nên app sẽ THU NHỎ cửa sổ "
+            "xuống Dock — đừng bấm mở lại cửa sổ đó trong lúc đang chạy.")
         cl.addWidget(self.chk_hidden)
 
         cl.addWidget(QLabel("Nguồn prompt:"))
@@ -337,6 +347,28 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(ptab, "Prompt (sửa)")
 
         # tab ảnh
+        gtab = QWidget()
+        gtl = QVBoxLayout(gtab)
+        gtl.setContentsMargins(0, 0, 0, 0)
+        gtl.setSpacing(6)
+
+        # thanh công cụ: tải tất cả ảnh / mở thư mục
+        gbar = QHBoxLayout()
+        gbar.setContentsMargins(10, 8, 10, 0)
+        self.btn_dl_all = QPushButton("⬇ Tải tất cả ảnh về máy")
+        self.btn_dl_all.setObjectName("Maroon")
+        self.btn_dl_all.clicked.connect(self._on_download_all)
+        self.btn_dl_all.setEnabled(False)
+        gbar.addWidget(self.btn_dl_all)
+        self.btn_open_dir2 = QPushButton("Mở thư mục kết quả")
+        self.btn_open_dir2.clicked.connect(self._open_dir)
+        gbar.addWidget(self.btn_open_dir2)
+        self.lbl_gallery_count = QLabel("")
+        self.lbl_gallery_count.setProperty("muted", True)
+        gbar.addWidget(self.lbl_gallery_count)
+        gbar.addStretch(1)
+        gtl.addLayout(gbar)
+
         gwrap = QScrollArea()
         gwrap.setWidgetResizable(True)
         self.gallery_host = QWidget()
@@ -345,7 +377,8 @@ class MainWindow(QMainWindow):
         self.gallery.setSpacing(12)
         self.gallery.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         gwrap.setWidget(self.gallery_host)
-        self.tabs.addTab(gwrap, "Ảnh kết quả")
+        gtl.addWidget(gwrap, 1)
+        self.tabs.addTab(gtab, "Ảnh kết quả")
 
         # tab SEO
         seo = QWidget()
@@ -432,6 +465,10 @@ class MainWindow(QMainWindow):
         """Tên slot tài khoản đang chọn (từ itemData). '' nếu là 'Tài khoản mới'."""
         d = self.cb_profile.currentData()
         return d or ""
+
+    def _product_extra(self):
+        """Các ảnh sản phẩm PHỤ (mẫu mã/màu khác) — bỏ ảnh đầu (ảnh chính)."""
+        return [Path(p) for p in self.pick_product.paths[1:]]
 
     def _profile_name(self):
         n = self._selected_raw()
@@ -587,6 +624,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)
         params = dict(
             product=Path(self.pick_product.path),
+            product_extra=self._product_extra(),
             types=types,
             language=self.cb_lang.currentText(),
             product_info=self.ed_info.toPlainText().strip(),
@@ -714,6 +752,7 @@ class MainWindow(QMainWindow):
         params = dict(
             prompts=prompts,
             product=Path(self.pick_product.path),
+            product_extra=self._product_extra(),
             person=Path(self.pick_person.path) if self.pick_person.path else None,
             scene=Path(self.pick_scene.path) if self.pick_scene.path else None,
             attributes=self.analysis.get("attributes", {}),
@@ -811,11 +850,93 @@ class MainWindow(QMainWindow):
             card = ResultCard(r)
             card.edit_requested.connect(self._on_edit)
             card.view_requested.connect(self._on_view)
+            card.download_requested.connect(self._on_download_one)
             self.gallery.addWidget(card, i // cols, i % cols)
+        n = len(self.results)
+        self.btn_dl_all.setEnabled(n > 0)
+        self.lbl_gallery_count.setText(f"{n} ảnh" if n else "")
 
     def _on_view(self, card: ResultCard):
         ImageViewer(card.result.get("image"),
                     card.result.get("label") or card.result.get("type"), self).exec()
+
+    # ------------------------------------------------------------------ #
+    #  TẢI ẢNH VỀ MÁY
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _safe_name(s: str) -> str:
+        """Bỏ ký tự Windows không cho phép trong tên file."""
+        keep = "".join(c for c in (s or "") if c.isalnum() or c in " -_")
+        return keep.strip().replace(" ", "_") or "anh"
+
+    def _suggest_name(self, r: dict, idx: int | None = None) -> str:
+        """Tên file gợi ý: 01_ten_loai.png"""
+        src = Path(r.get("image", ""))
+        base = self._safe_name(r.get("type") or r.get("label"))
+        prefix = f"{idx:02d}_" if idx is not None else ""
+        return f"{prefix}{base}{src.suffix or '.png'}"
+
+    def _on_download_one(self, card: ResultCard):
+        """Tải 1 ảnh: hỏi nơi lưu rồi copy."""
+        src = card.result.get("image")
+        if not src or not Path(src).is_file():
+            QMessageBox.warning(self, "Không tìm thấy ảnh",
+                                "File ảnh không còn trên máy.")
+            return
+        target_dir = self._last_save_dir or str(Path.home() / "Downloads")
+        dest, _ = QFileDialog.getSaveFileName(
+            self, "Lưu ảnh", str(Path(target_dir) / self._suggest_name(card.result)),
+            "Ảnh (*.png *.jpg *.jpeg *.webp);;Tất cả (*)")
+        if not dest:
+            return
+        try:
+            shutil.copy2(src, dest)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi lưu ảnh", str(e))
+            return
+        self._last_save_dir = str(Path(dest).parent)
+        self._logline(f">> Đã lưu ảnh: {dest}")
+        self.statusBar().showMessage(f"Đã lưu: {Path(dest).name}", 4000)
+
+    def _on_download_all(self):
+        """Tải TẤT CẢ ảnh: chọn thư mục rồi copy toàn bộ, đánh số theo thứ tự."""
+        if not self.results:
+            return
+        start = self._last_save_dir or str(Path.home() / "Downloads")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Chọn thư mục lưu tất cả ảnh", start)
+        if not folder:
+            return
+
+        # Gom vào thư mục con theo phiên để không lẫn với ảnh cũ.
+        sub = Path(folder) / (Path(self.session_dir).name if self.session_dir
+                              else "listing_images")
+        try:
+            sub.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi tạo thư mục", str(e))
+            return
+
+        ok, fail = 0, []
+        for i, r in enumerate(self.results, 1):
+            src = r.get("image")
+            if not src or not Path(src).is_file():
+                fail.append(r.get("type") or f"ảnh {i}")
+                continue
+            try:
+                shutil.copy2(src, sub / self._suggest_name(r, i))
+                ok += 1
+            except Exception:
+                fail.append(r.get("type") or f"ảnh {i}")
+
+        self._last_save_dir = folder
+        self._logline(f">> Đã tải {ok}/{len(self.results)} ảnh về: {sub}")
+        msg = f"Đã lưu {ok}/{len(self.results)} ảnh vào:\n{sub}"
+        if fail:
+            msg += "\n\nKhông lưu được: " + ", ".join(fail)
+            QMessageBox.warning(self, "Tải xong (có lỗi)", msg)
+        else:
+            QMessageBox.information(self, "Tải xong", msg)
 
     def _on_edit(self, card: ResultCard):
         dlg = EditDialog(card.result, self)
@@ -834,12 +955,19 @@ class MainWindow(QMainWindow):
         dest = base.with_name(f"{base.stem}_edit_{int(time.time())}.png")
         card.btn_edit.setEnabled(False)
         card.btn_edit.setText("Đang sửa...")
-        self._logline(f">> Sửa ảnh [{card.result.get('type')}]: {prompt[:50]}...")
+        # QUAN TRỌNG: mở lại chat bằng ĐÚNG tài khoản đã tạo ảnh này. Nếu bộ ảnh
+        # được tạo qua nhiều tài khoản (xoay khi hết lượt), dùng tài khoản đang
+        # chọn trên dropdown sẽ mở nhầm sang chat khác (thường là chat gần nhất)
+        # → "sửa ảnh nào cũng ra ảnh cuối". Ưu tiên profile lưu trong kết quả.
+        edit_profile = card.result.get("profile") or self._profile_name()
+        self._logline(
+            f">> Sửa ảnh [{card.result.get('type')}] (tài khoản: "
+            f"{edit_profile or 'mặc định'}): {prompt[:50]}...")
         self._set_running(True, "Đang sửa ảnh")
 
         w = EditWorker(conv, prompt, dest,
                        [Path(ref)] if ref else None,
-                       self._profile_name(), self.chk_hidden.isChecked())
+                       edit_profile, self.chk_hidden.isChecked())
         w.done.connect(lambda p, c=card, ww=w: self._on_edit_done(c, p, ww))
         w.failed.connect(lambda e, c=card, ww=w: self._on_edit_fail(c, e, ww))
         self.edit_workers.append(w)

@@ -49,14 +49,26 @@ def to_square(path: Path, size: int = TARGET_SIZE) -> None:
     img.save(path)
 
 
+def _product_list(product) -> List[Path]:
+    """Chuẩn hoá 'product' về danh sách Path (nhận 1 ảnh hoặc nhiều ảnh)."""
+    if product is None:
+        return []
+    if isinstance(product, (str, Path)):
+        return [Path(product)]
+    return [Path(p) for p in product if p]
+
+
 def select_refs(
     p_type: str,
-    product: Path,
+    product,
     person: Optional[Path] = None,
     scene: Optional[Path] = None,
 ) -> List[Path]:
-    """Chọn ảnh tham chiếu upload theo loại ảnh (giống USE_*_TYPES của MD)."""
-    refs: List[Path] = [Path(product)]
+    """Chọn ảnh tham chiếu upload theo loại ảnh (giống USE_*_TYPES của MD).
+
+    `product` có thể là 1 ảnh hoặc DANH SÁCH ảnh (cùng sản phẩm, khác mẫu mã).
+    Ảnh sản phẩm luôn đứng ĐẦU danh sách refs (person/scene sau)."""
+    refs: List[Path] = _product_list(product) or [Path(product)]
     if p_type in USE_PERSON_TYPES and person:
         refs.append(Path(person))
     if p_type in USE_SCENE_TYPES and scene:
@@ -89,11 +101,32 @@ LOGIC = (
 _MODEST = "Modest, fully appropriate commercial advertising photography."
 
 
+def _lang_note(language: str) -> str:
+    """Chỉ thị NGÔN NGỮ cho chữ hiển thị trên ảnh (áp lúc TẠO ảnh).
+
+    Prompt do ChatGPT sinh viết bằng tiếng Việt (để user dễ sửa) nên nếu không
+    ép ở bước tạo ảnh, model hay in luôn chữ tiếng Việt lên ảnh. Đây là lý do
+    'chọn English mà ảnh vẫn ra tiếng Việt'."""
+    if (language or "").lower().startswith("en"):
+        return (
+            "NGÔN NGỮ CHỮ TRÊN ẢNH: TẤT CẢ chữ hiển thị trên ảnh (tiêu đề, nhãn, "
+            "badge, nút, mọi caption) PHẢI bằng TIẾNG ANH. Nếu prompt mô tả chữ "
+            "bằng tiếng Việt thì DỊCH sang tiếng Anh tự nhiên, ĐÚNG chính tả; "
+            "TUYỆT ĐỐI KHÔNG để lại bất kỳ chữ tiếng Việt nào trên ảnh."
+        )
+    return (
+        "NGÔN NGỮ CHỮ TRÊN ẢNH: tất cả chữ hiển thị trên ảnh bằng TIẾNG VIỆT, "
+        "đúng chính tả, có dấu đầy đủ."
+    )
+
+
 def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
                         has_scene: bool, notable_details=None,
-                        theme: str = "", shop: str = "", logo_img: bool = False) -> str:
+                        theme: str = "", shop: str = "", logo_img: bool = False,
+                        language: str = "en", n_products: int = 1) -> str:
     """Ghép prompt cuối: nội dung + giữ nguyên sản phẩm/người + CHÂN THỰC + an toàn."""
     notes = []
+    notes.append(_lang_note(language))
     if theme:
         notes.append(f"Đồng bộ theme thiết kế chung cả bộ: {theme}.")
     if logo_img:
@@ -104,6 +137,7 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
         )
     elif shop:
         notes.append(f"Thêm logo shop '{shop}' ở góc, nhất quán.")
+    n_products = max(1, int(n_products or 1))
     if len(refs) == 1:
         notes.append(
             "Ảnh đính kèm là SẢN PHẨM: giữ NGUYÊN thiết kế, nhãn, chữ, màu sắc, "
@@ -112,11 +146,26 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
             "xén, không bỏ sót chi tiết."
         )
     else:
-        parts = [
-            "Ảnh 1 là SẢN PHẨM (giữ NGUYÊN thiết kế, nhãn, chữ, màu sắc; hiển thị "
-            "ĐẦY ĐỦ mọi bộ phận gồm dây điện, nút, đầu phụ kiện — không bỏ sót)."
-        ]
-        i = 2
+        if n_products == 1:
+            parts = [
+                "Ảnh 1 là SẢN PHẨM (giữ NGUYÊN thiết kế, nhãn, chữ, màu sắc; hiển "
+                "thị ĐẦY ĐỦ mọi bộ phận gồm dây điện, nút, đầu phụ kiện — không bỏ sót)."
+            ]
+            i = 2
+        else:
+            # Nhiều ảnh sản phẩm = CÙNG 1 sản phẩm, khác mẫu mã/màu sắc nhưng
+            # chức năng y hệt. Cho model hiểu để không ghép nhầm thành nhiều món.
+            parts = [
+                f"Ảnh 1 đến Ảnh {n_products} là CÙNG MỘT sản phẩm nhưng khác "
+                "MẪU MÃ/MÀU SẮC/phiên bản (chức năng, hình dạng, bộ phận GIỐNG "
+                "hệt nhau). Đây KHÔNG phải nhiều sản phẩm khác nhau. Giữ NGUYÊN "
+                "thiết kế, nhãn, chữ, tỉ lệ và ĐẦY ĐỦ mọi bộ phận (dây điện, nút, "
+                "đầu phụ kiện...) đúng như các ảnh mẫu. Trừ khi prompt nói rõ phải "
+                "ghép nhiều biến thể vào một khung, hãy chọn MỘT biến thể tiêu biểu "
+                "(hoặc biến thể mà prompt chỉ định) để dựng ảnh, các biến thể còn "
+                "lại chỉ dùng để hiểu đúng sản phẩm."
+            ]
+            i = n_products + 1
         if has_person:
             parts.append(
                 f"Ảnh {i} là NGƯỜI MẪU: BẮT BUỘC đưa CHÍNH người mẫu này vào ảnh "
@@ -179,7 +228,7 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
 async def generate_one(
     session: AioSession,
     prompt_obj: dict,
-    product: Path,
+    product,
     person: Optional[Path] = None,
     scene: Optional[Path] = None,
     dest: Optional[Path] = None,
@@ -189,15 +238,19 @@ async def generate_one(
     theme: str = "",
     shop: str = "",
     logo: Optional[Path] = None,
+    language: str = "en",
 ) -> dict:
-    """Tạo 1 ảnh, tải về dest. Trả result {type,label,prompt,image,status,error}."""
+    """Tạo 1 ảnh, tải về dest. Trả result {type,label,prompt,image,status,error}.
+
+    `product` nhận 1 ảnh hoặc DANH SÁCH ảnh (cùng sản phẩm, khác mẫu mã/màu)."""
     p_type = prompt_obj["type"]
     refs = select_refs(p_type, product, person, scene)
+    n_products = len(_product_list(product)) or 1
     has_person = person is not None and p_type in USE_PERSON_TYPES
     has_scene = scene is not None and p_type in USE_SCENE_TYPES
     final_prompt = _build_final_prompt(
         prompt_obj["prompt"], refs, has_person, has_scene, notable_details,
-        theme, shop, logo_img=bool(logo),
+        theme, shop, logo_img=bool(logo), language=language, n_products=n_products,
     )
 
     last_err = ""

@@ -61,11 +61,13 @@ async def run_pipeline(
     headless: bool = False,
     hidden: bool = False,
     profile_dir: Optional[Path] = None,
+    product_extra: Optional[List[Path]] = None,
     progress: ProgressCB = None,
 ) -> dict:
     """Chạy trọn pipeline (analyze + tạo ảnh), trả về dict tổng hợp + zip."""
     types = types or list(DEFAULT_TYPES)
     types = [t for t in types if t in PROMPT_TYPE_KEYS][:quantity]
+    products = [product] + [p for p in (product_extra or [])]
 
     br = AioBrowser(headless=headless, hidden=hidden,
                     **({"profile_dir": profile_dir} if profile_dir else {}))
@@ -79,7 +81,8 @@ async def run_pipeline(
 
         _emit(progress, "analyze_start", {})
         analysis = await analyze(
-            s0, product, types, language, product_info, shop, market, want_seo
+            s0, product, types, language, product_info, shop, market, want_seo,
+            product_extra=product_extra,
         )
         prompts = _filter_prompts(analysis["prompts"], types, quantity)
         theme = analysis.get("theme", "")
@@ -88,7 +91,7 @@ async def run_pipeline(
             raise RuntimeError("Không sinh được prompt nào.")
 
         return await _finish_generate(
-            br, s0, prompts, product, person, scene,
+            br, s0, prompts, products, person, scene,
             analysis.get("attributes", {}), theme, shop,
             analysis.get("seo", {}), concurrency, qc, output_base, progress,
             language=language,
@@ -123,7 +126,7 @@ async def _finish_generate(br, first_session, prompts, product, person, scene,
             res = await generate_one(
                 sess, prompt_obj, product, person, scene, dest=dest,
                 notable_details=(attributes or {}).get("notable_details"),
-                theme=theme, shop=shop, logo=logo,
+                theme=theme, shop=shop, logo=logo, language=language,
             )
             if qc and res["status"] == "success":
                 res["qc"] = await qc_image(sess, res["image"], attributes or {})
@@ -161,6 +164,7 @@ async def make_prompts_pipeline(product: Path, types=None,
                                 profile_dir: Optional[Path] = None,
                                 cancel=None, has_person: bool = False,
                                 has_scene: bool = False,
+                                product_extra: Optional[List[Path]] = None,
                                 progress: ProgressCB = None) -> dict:
     """Nút '① Tạo prompt' — CHỉ sinh prompt (tiếng Việt), KHÔNG SEO."""
     types = types or list(DEFAULT_TYPES)
@@ -188,7 +192,8 @@ async def make_prompts_pipeline(product: Path, types=None,
         _emit(progress, "analyze_start", {})
         res = await make_prompts(s0, product, types, language, product_info,
                                  shop, market, has_person=has_person,
-                                 has_scene=has_scene, extra_sessions=extra)
+                                 has_scene=has_scene, extra_sessions=extra,
+                                 product_extra=product_extra)
         res["prompts"] = _filter_prompts(res["prompts"], types, quantity)
         _emit(progress, "analyze_done", {"n_prompts": len(res["prompts"])})
         return res
@@ -252,7 +257,8 @@ async def _session_hit_limit(sess) -> bool:
 
 async def _batch_account(br, page0, items, product, person, scene, attributes,
                          theme, shop, concurrency, qc, sdir, total, base_done,
-                         progress, cancel=None, logo=None):
+                         progress, cancel=None, logo=None, language="vi",
+                         profile_name=""):
     """Chạy các job bằng 1 tài khoản; dừng khi HẾT LƯỢT hoặc user HỦY.
     Trả (done, remaining, limit). Raise StopRequested nếu user hủy."""
     conc = max(1, min(concurrency, len(items)))
@@ -297,8 +303,10 @@ async def _batch_account(br, page0, items, product, person, scene, attributes,
                 res = await generate_one(
                     sess, prompt_obj, product, person, scene, dest=dest,
                     notable_details=(attributes or {}).get("notable_details"),
-                    theme=theme, shop=shop, logo=logo,
+                    theme=theme, shop=shop, logo=logo, language=language,
                 )
+                # đóng dấu TÀI KHOẢN đã tạo ảnh này → lúc sửa mở đúng tài khoản
+                res["profile"] = profile_name
                 if res["status"] == "success":
                     if qc:
                         res["qc"] = await qc_image(sess, res["image"], attributes or {})
@@ -342,6 +350,7 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
                                 logo: Optional[Path] = None,
                                 want_seo: bool = False, product_info: str = "",
                                 language: str = "vi",
+                                product_extra: Optional[List[Path]] = None,
                                 progress: ProgressCB = None) -> dict:
     """Tạo ảnh từ prompt cho sẵn, TỰ XOAY qua các tài khoản khi hết lượt.
 
@@ -356,6 +365,8 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
     items = [(i + 1, p) for i, p in enumerate(prompts)]
     n = len(items)
     profiles = profiles or [(None, "default")]
+    # gộp ảnh sản phẩm chính + các mẫu mã phụ → 1 danh sách để upload khi tạo ảnh
+    products = [product] + [p for p in (product_extra or [])]
 
     sid, sdir = store.new_session_dir(output_base)
     store.write_prompts(sdir, prompts)
@@ -436,9 +447,9 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
                               {"profile": prof_name, "error": repr(e)})
             try:
                 done, remaining, limit_hit = await _batch_account(
-                    br, page0, remaining, product, person, scene, attributes, theme,
+                    br, page0, remaining, products, person, scene, attributes, theme,
                     shop, concurrency, qc, sdir, n, len(results_by_idx), progress,
-                    cancel, logo,
+                    cancel, logo, language=language, profile_name=prof_name,
                 )
             finally:
                 if seo_task is not None:

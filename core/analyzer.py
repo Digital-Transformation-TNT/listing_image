@@ -101,11 +101,23 @@ async def extract_attributes(
     product_path: Path,
     product_info: str = "",
     timeout_ms: int = 120000,
+    product_extra: Optional[List[Path]] = None,
 ) -> dict:
-    """[Message 1 — VISION] Upload ảnh sản phẩm, trích thuộc tính JSON."""
+    """[Message 1 — VISION] Upload ảnh sản phẩm, trích thuộc tính JSON.
+
+    `product_extra`: các ảnh CÙNG sản phẩm khác mẫu mã/màu — upload kèm để model
+    hiểu đúng phạm vi sản phẩm (không coi là nhiều món khác nhau)."""
+    imgs = [Path(product_path)] + [Path(p) for p in (product_extra or [])]
     await session.new_chat()
-    await session.upload_images([Path(product_path)])
+    await session.upload_images(imgs)
     extra = f"\n\nThông tin thêm user cung cấp: {product_info}" if product_info else ""
+    variants = (
+        f"\n\nLƯU Ý: có {len(imgs)} ảnh đính kèm — đây là CÙNG MỘT sản phẩm nhưng "
+        "khác MẪU MÃ/MÀU SẮC/phiên bản (chức năng giống hệt). Hãy trích thuộc tính "
+        "CHUNG cho sản phẩm; nếu các biến thể khác nhau ở màu/kiểu thì liệt kê vào "
+        "'dominant_colors'/'notable_details'. KHÔNG coi là nhiều sản phẩm khác nhau."
+        if len(imgs) > 1 else ""
+    )
     prompt = (
         "Bạn là chuyên gia phân tích sản phẩm cho ảnh quảng cáo. "
         "Nhìn ẢNH sản phẩm này và trích thuộc tính THẬT KỸ. "
@@ -125,6 +137,7 @@ async def extract_attributes(
         '"theme":"<tông màu + kiểu font + phong cách thiết kế dùng chung cho cả '
         'bộ ảnh listing, 1 câu tiếng Việt>"'
         "}"
+        + variants
         + extra
     )
     # Lấy luôn 'theme' ở bước nhìn ảnh → các tab sinh prompt song song sau đó
@@ -406,14 +419,18 @@ async def make_prompts(
     has_person: bool = False,
     has_scene: bool = False,
     extra_sessions: Optional[List[AioSession]] = None,
+    product_extra: Optional[List[Path]] = None,
 ) -> dict:
     """Trích thuộc tính + sinh PROMPT (tiếng Việt). Không SEO. KHÔNG bao giờ rỗng.
 
     `extra_sessions`: các tab phụ. Có tab phụ thì 9 loại ảnh được CHIA ĐỀU cho
     các tab và sinh SONG SONG → thời gian chờ giảm gần bằng 1/số tab (câu trả
     lời dài ~1000 từ là nút cổ chai lớn nhất của bước này).
+    `product_extra`: ảnh sản phẩm phụ (khác mẫu mã) — upload kèm ở mọi tab.
     """
-    attrs = attributes or await extract_attributes(session, product_path, product_info)
+    prod_imgs = [Path(product_path)] + [Path(p) for p in (product_extra or [])]
+    attrs = attributes or await extract_attributes(
+        session, product_path, product_info, product_extra=product_extra)
     theme = ""
     if isinstance(attrs, dict):
         theme = str(attrs.pop("theme", "") or "")
@@ -427,7 +444,7 @@ async def make_prompts(
             # tab phụ: mở chat mới + đưa ảnh sản phẩm vào cho model "nhìn" thấy
             await sess.new_chat()
             try:
-                await sess.upload_images([Path(product_path)])
+                await sess.upload_images(prod_imgs)
             except Exception:
                 pass
         data = await generate_prompts(sess, attrs, sub, image_lang, shop, market,
@@ -484,11 +501,14 @@ async def analyze(
     shop: str = "",
     market: str = DEFAULT_MARKET,
     want_seo: bool = True,
+    product_extra: Optional[List[Path]] = None,
 ) -> dict:
     """CLI: attributes + prompts (+ seo nếu want_seo). Dùng chung extract 1 lần."""
-    attrs = await extract_attributes(session, product_path, product_info)
+    attrs = await extract_attributes(session, product_path, product_info,
+                                     product_extra=product_extra)
     p = await make_prompts(session, product_path, types, language, product_info,
-                           shop, market, attributes=attrs)
+                           shop, market, attributes=attrs,
+                           product_extra=product_extra)
     seo = {}
     if want_seo:
         try:

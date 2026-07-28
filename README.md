@@ -80,6 +80,7 @@ Máy đích cần chạy `playwright install chrome` (browser không nhúng tron
 
 ```bash
 python tests/test_unit.py          # logic thuần (không cần trình duyệt)
+python tests/test_features.py      # ép chữ EN, nhiều ảnh SP, sửa ảnh đúng tài khoản
 python tests/test_ask_text.py      # chống lỗi "hỏi đi hỏi lại mãi" (trang giả)
 python mac_hidden_selftest.py      # chế độ chạy ngầm có thật sự ẩn + không bị bóp tốc độ
 python tests/test_integration.py   # luồng thật (cần đăng nhập)
