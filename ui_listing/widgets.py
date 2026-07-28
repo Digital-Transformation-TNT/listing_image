@@ -49,14 +49,18 @@ class ImagePicker(QFrame):
         cap = QLabel(f"{title}{star}{multi_hint}")
         cap.setObjectName("H2")
         lay.addWidget(cap)
-        hint = ("Kéo-thả nhiều ảnh vào đây\nhoặc bấm Chọn ảnh" if multiple
+        hint = ("Kéo-thả nhiều ảnh vào đây hoặc bấm Chọn ảnh" if multiple
                 else "Kéo-thả ảnh vào đây\nhoặc bấm Chọn ảnh")
         self.preview = QLabel(hint)
         self.preview.setProperty("muted", True)
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumHeight(96)
+        # multiple: ô trên chỉ là 1 dòng trạng thái MỎNG → nhường chỗ cho danh
+        # sách ảnh bên dưới. single: giữ ô xem trước lớn như cũ.
+        self.preview.setMinimumHeight(28 if multiple else 96)
+        pad = "6px 8px" if multiple else "0"
         self.preview.setStyleSheet(
-            f"border:1px dashed {theme.BORDER}; border-radius:8px; color:{theme.TEXT_MUTED};")
+            f"border:1px dashed {theme.BORDER}; border-radius:8px; "
+            f"color:{theme.TEXT_MUTED}; padding:{pad};")
         lay.addWidget(self.preview)
 
         # multiple: danh sách ảnh đã chọn (thumbnail nhỏ + tên + nút ✕ xóa riêng)
@@ -66,12 +70,14 @@ class ImagePicker(QFrame):
         if multiple:
             self.list_area = QScrollArea()
             self.list_area.setWidgetResizable(True)
-            self.list_area.setMaximumHeight(190)
+            self.list_area.setMinimumHeight(150)
+            self.list_area.setMaximumHeight(320)
+            self.list_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.list_area.setFrameShape(QFrame.NoFrame)
             self.list_host = QWidget()
             self.list_layout = QVBoxLayout(self.list_host)
             self.list_layout.setContentsMargins(0, 0, 0, 0)
-            self.list_layout.setSpacing(4)
+            self.list_layout.setSpacing(6)
             self.list_layout.setAlignment(Qt.AlignTop)
             self.list_area.setWidget(self.list_host)
             self.list_area.setVisible(False)
@@ -187,12 +193,20 @@ class ImagePicker(QFrame):
         except Exception:
             pass
         h.addWidget(name, 1)
-        # nút xóa riêng ảnh này
+        # nút xóa riêng ảnh này. PHẢI tự set style: nút toàn cục có
+        # padding 8x14 → nút nhỏ 28px sẽ nuốt mất chữ ✕ (đó là lý do không thấy).
         btn = QPushButton("✕")
-        btn.setFixedWidth(30)
+        btn.setFixedSize(28, 28)
+        btn.setCursor(Qt.PointingHandCursor)
         btn.setToolTip("Bỏ ảnh này")
+        btn.setStyleSheet(
+            f"QPushButton {{ padding:0; margin:0; font-size:15px; font-weight:800; "
+            f"color:{theme.ERR}; background:{theme.CARD}; "
+            f"border:1px solid {theme.BORDER}; border-radius:6px; }}"
+            f"QPushButton:hover {{ color:white; background:{theme.ERR}; "
+            f"border:1px solid {theme.ERR}; }}")
         btn.clicked.connect(lambda _=False, f=path: self.remove_path(f))
-        h.addWidget(btn)
+        h.addWidget(btn, 0, Qt.AlignVCenter)
         return row
 
     def _clear(self):
