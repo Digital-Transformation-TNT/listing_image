@@ -16,6 +16,7 @@ except Exception:
 
 from core.generator import (  # noqa: E402
     _build_final_prompt, _lang_note, select_refs, _product_list,
+    _variant_note, build_edit_prompt, SHOW_ALL_VARIANTS_TYPES,
 )
 
 PASS, FAIL = [], []
@@ -65,6 +66,36 @@ one = _build_final_prompt(
 )
 check("1 product → KHÔNG nhắc 'CÙNG MỘT sản phẩm'", "CÙNG MỘT sản phẩm" not in one)
 check("1 product → người mẫu là Ảnh 2", "Ảnh 2 là NGƯỜI MẪU" in one)
+
+# --------------------------------------------------------------------------- #
+print("== xoay vòng biến thể màu (không khoá 1 màu) ==")
+check("1 sản phẩm → không có chỉ thị biến thể", _variant_note("detail_info", 3, 1) == "")
+# ảnh khoe hàng → show nhiều màu
+tn = _variant_note("thumbnail", 1, 4)
+check("thumbnail → khoe NHIỀU màu cùng lúc", "NHIỀU" in tn and "thumbnail" not in tn.lower() or "NHIỀU" in tn)
+# ảnh thường → xoay vòng theo vị trí, KHÔNG mặc định ảnh đầu
+v1 = _variant_note("detail_info", 1, 4)
+v2 = _variant_note("detail_info", 2, 4)
+v6 = _variant_note("detail_info", 6, 4)   # 6 mod 4 = 2 → Ảnh số 2
+check("ảnh #1 → biến thể Ảnh số 1", "Ảnh số 1" in v1, v1)
+check("ảnh #2 → biến thể Ảnh số 2 (khác #1)", "Ảnh số 2" in v2 and v1 != v2, v2)
+check("ảnh #6 (mod 4) → quay lại Ảnh số 2", "Ảnh số 2" in v6, v6)
+check("chống mặc định lấy ảnh đầu", "KHÔNG mặc định lấy ảnh đầu" in v1)
+# prompt tạo ảnh nhúng đúng chỉ thị biến thể theo variant_index
+fp3 = _build_final_prompt("Ảnh.", [Path("a.png"), Path("b.png"), Path("c.png")],
+                          False, False, n_products=3, p_type="detail_info",
+                          variant_index=2)
+check("_build_final_prompt nhúng biến thể theo index", "Ảnh số 2" in fp3)
+
+# --------------------------------------------------------------------------- #
+print("== sửa ảnh: upload ảnh + prompt (+ tham chiếu) ==")
+e0 = build_edit_prompt("đổi nền sang xám", has_ref=False)
+check("edit: nói rõ Ảnh 1 là ảnh CẦN SỬA", "CẦN CHỈNH SỬA" in e0)
+check("edit: giữ nguyên phần khác", "GIỮ NGUYÊN" in e0)
+check("edit: chứa yêu cầu user", "đổi nền sang xám" in e0)
+check("edit: không ref → không nhắc ảnh tham chiếu", "THAM CHIẾU" not in e0)
+e1 = build_edit_prompt("theo logo này", has_ref=True)
+check("edit: có ref → nhắc Ảnh thứ 2 tham chiếu", "THAM CHIẾU" in e1)
 
 # --------------------------------------------------------------------------- #
 print("== đóng dấu tài khoản khi tạo ảnh (để sửa đúng chỗ) ==")

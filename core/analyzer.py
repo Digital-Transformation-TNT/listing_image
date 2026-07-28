@@ -164,12 +164,14 @@ async def generate_prompts(
     has_scene: bool = False,
     timeout_ms: int = 200000,
     theme: str = "",
+    n_products: int = 1,
 ) -> dict:
     """CHỈ sinh prompt (KHÔNG SEO). Nội dung prompt bằng TIẾNG VIỆT để user dễ sửa;
     chữ HIỂN THỊ TRÊN ẢNH theo image_lang (en/vi).
 
     `theme`: nếu đã có sẵn (từ bước đọc ảnh) thì BẮT theo đúng theme đó — nhờ vậy
     nhiều tab sinh prompt song song vẫn cho ra một bộ ảnh đồng bộ.
+    `n_products`: số ảnh sản phẩm (biến thể màu/mẫu) → nhắc prompt thể hiện đa dạng.
     """
     style_lines = []
     for t in types:
@@ -179,6 +181,16 @@ async def generate_prompts(
     img_txt = "TIẾNG ANH" if image_lang == "en" else "TIẾNG VIỆT"
 
     refs_note = []
+    if n_products > 1:
+        refs_note.append(
+            f"- CÓ {n_products} ẢNH SẢN PHẨM = CÙNG một sản phẩm, khác MÀU/MẪU MÃ "
+            "(chức năng như nhau). Hãy để CÁC ẢNH KHÁC NHAU thể hiện các MÀU/BIẾN "
+            "THỂ KHÁC NHAU để khoe đủ dải sản phẩm — KHÔNG bắt cả bộ chung 1 màu, "
+            "KHÔNG mặc định chỉ dùng ảnh đầu tiên. Ảnh bìa (thumbnail), tính năng "
+            "(features), đối tượng (audience) NÊN cho thấy NHIỀU màu cùng lúc; các "
+            "ảnh còn lại mỗi ảnh chọn 1 màu/biến thể khác nhau. Nêu rõ màu/biến thể "
+            "trong prompt."
+        )
     if has_person:
         person_labels = ", ".join(
             f"{t} ({PROMPT_TYPE_LABELS.get(t, t)})"
@@ -448,7 +460,8 @@ async def make_prompts(
             except Exception:
                 pass
         data = await generate_prompts(sess, attrs, sub, image_lang, shop, market,
-                                      has_person, has_scene, theme=theme)
+                                      has_person, has_scene, theme=theme,
+                                      n_products=len(prod_imgs))
         return _clean_prompts((data or {}).get("prompts"), sub)
 
     if len(shards) == 1:

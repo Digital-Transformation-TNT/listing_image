@@ -95,10 +95,11 @@ class EditWorker(QThread):
     done = Signal(str)     # đường dẫn ảnh mới
     failed = Signal(str)
 
-    def __init__(self, conversation_url: str, edit_prompt: str, dest: Path,
+    def __init__(self, image_path: str, edit_prompt: str, dest: Path,
                  extra_images: Optional[List[Path]], profile: Optional[str],
-                 hidden: bool, parent=None):
+                 hidden: bool, conversation_url: str = "", parent=None):
         super().__init__(parent)
+        self.image_path = image_path
         self.conversation_url = conversation_url
         self.edit_prompt = edit_prompt
         self.dest = dest
@@ -109,9 +110,10 @@ class EditWorker(QThread):
     def run(self):
         try:
             out = asyncio.run(edit_image(
-                self.conversation_url, self.edit_prompt, self.dest,
+                self.image_path, self.edit_prompt, self.dest,
                 extra_images=self.extra_images,
                 profile_dir=profile_path(self.profile), hidden=self.hidden,
+                conversation_url=self.conversation_url,
             ))
             if out:
                 self.done.emit(out)

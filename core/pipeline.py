@@ -18,7 +18,7 @@ from core.aio_chatgpt import AioSession, StopRequested
 from core.analyzer import (
     analyze, make_prompts, make_seo, generate_seo, PROMPT_SHARDS,
 )
-from core.generator import generate_one, to_square
+from core.generator import generate_one, to_square, build_edit_prompt
 from core.qc import qc_image
 from core import store
 from config import (
@@ -127,6 +127,7 @@ async def _finish_generate(br, first_session, prompts, product, person, scene,
                 sess, prompt_obj, product, person, scene, dest=dest,
                 notable_details=(attributes or {}).get("notable_details"),
                 theme=theme, shop=shop, logo=logo, language=language,
+                variant_index=idx,
             )
             if qc and res["status"] == "success":
                 res["qc"] = await qc_image(sess, res["image"], attributes or {})
@@ -304,6 +305,7 @@ async def _batch_account(br, page0, items, product, person, scene, attributes,
                     sess, prompt_obj, product, person, scene, dest=dest,
                     notable_details=(attributes or {}).get("notable_details"),
                     theme=theme, shop=shop, logo=logo, language=language,
+                    variant_index=idx,
                 )
                 # đóng dấu TÀI KHOẢN đã tạo ảnh này → lúc sửa mở đúng tài khoản
                 res["profile"] = profile_name
@@ -503,15 +505,24 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
 
 
 async def edit_image(
-    conversation_url: str,
+    image_path,
     edit_prompt: str,
     dest: Path,
     extra_images: Optional[List[Path]] = None,
     profile_dir: Optional[Path] = None,
     hidden: bool = False,
     headless: bool = False,
+    conversation_url: str = "",   # giữ để tương thích; không bắt buộc
 ) -> Optional[str]:
-    """Mở lại đúng cuộc chat, gửi prompt sửa → tải ảnh MỚI (vuông) về dest."""
+    """SỬA ẢNH bằng cách UPLOAD ẢNH CẦN SỬA (+ ảnh tham chiếu) + prompt vào 1 CHAT
+    MỚI, rồi tải ảnh MỚI về dest.
+
+    Cách cũ mở lại chat cũ theo URL hay hỏng (sai tài khoản / chat không nạp /
+    model không nhớ ngữ cảnh) → 'không sửa được'. Upload thẳng ảnh cần sửa thì
+    chắc chắn model có đúng ảnh để chỉnh, không phụ thuộc chat cũ."""
+    img = Path(image_path)
+    if not img.is_file():
+        raise RuntimeError(f"Không tìm thấy ảnh cần sửa: {img}")
     br = AioBrowser(headless=headless, hidden=hidden,
                     **({"profile_dir": profile_dir} if profile_dir else {}))
     await br.start()
@@ -521,8 +532,15 @@ async def edit_image(
         if not await br.is_logged_in(page, timeout_ms=20000):
             raise RuntimeError("Chưa đăng nhập ChatGPT.")
         s = AioSession(page)
-        await s.open_conversation(conversation_url)
-        src = await s.refine(edit_prompt, extra_images)
+        await s.new_chat()
+        refs = [img] + [Path(p) for p in (extra_images or []) if p]
+        await s.upload_images(refs)
+        prompt = build_edit_prompt(edit_prompt, has_ref=bool(extra_images))
+        baseline = set(await s.generated_srcs())
+        await s.type_prompt(prompt)
+        await s.send()
+        await s.page.wait_for_timeout(800)
+        src = await s.wait_for_image(timeout_ms=240000, baseline=baseline)
         if not src:
             return None
         out = Path(dest)

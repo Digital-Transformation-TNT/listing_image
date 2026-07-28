@@ -100,6 +100,48 @@ LOGIC = (
 )
 _MODEST = "Modest, fully appropriate commercial advertising photography."
 
+# Các loại ảnh NÊN khoe nhiều màu/biến thể cùng lúc (thay vì 1 màu).
+SHOW_ALL_VARIANTS_TYPES = {"thumbnail", "features", "audience"}
+
+
+def _variant_note(p_type: str, variant_index: int, n_products: int) -> str:
+    """Chỉ thị BIẾN THỂ khi có nhiều ảnh sản phẩm (nhiều màu/mẫu).
+
+    Trước đây prompt bảo 'chọn MỘT biến thể tiêu biểu' → model mặc định lấy ảnh
+    ĐẦU TIÊN → cả bộ chỉ 1 màu. Nay: ảnh khoe hàng thì show NHIỀU màu; ảnh còn
+    lại XOAY vòng qua từng biến thể để cả bộ thể hiện đủ dải màu/mẫu."""
+    if n_products <= 1:
+        return ""
+    if p_type in SHOW_ALL_VARIANTS_TYPES:
+        return (
+            f"NHIỀU BIẾN THỂ: có {n_products} màu/mẫu (Ảnh 1..{n_products}). Ảnh "
+            "này NÊN thể hiện NHIỀU (hoặc tất cả) màu/mẫu cùng lúc, sắp xếp gọn "
+            "gàng để khoe đủ dải sản phẩm; mọi biến thể giữ ĐÚNG chức năng, hình "
+            "dạng và bộ phận, chỉ khác màu/kiểu."
+        )
+    k = ((max(1, variant_index) - 1) % n_products) + 1
+    return (
+        f"NHIỀU BIẾN THỂ: có {n_products} màu/mẫu (Ảnh 1..{n_products}). Ảnh này "
+        f"hãy thể hiện ĐÚNG biến thể ở Ảnh số {k}. KHÔNG mặc định lấy ảnh đầu "
+        f"tiên — bám đúng màu/mẫu của Ảnh số {k} (giữ nguyên chức năng/hình dạng)."
+    )
+
+
+def build_edit_prompt(user_edit: str, has_ref: bool = False) -> str:
+    """Prompt SỬA ẢNH: tạo lại đúng ảnh đính kèm + chỉ áp dụng thay đổi user yêu cầu."""
+    ref = (" Ảnh thứ 2 là ẢNH THAM CHIẾU: dùng làm mẫu cho yêu cầu "
+           "(màu/bố cục/logo/phong cách...)." if has_ref else "")
+    return (
+        "Ảnh 1 (đính kèm) là ảnh SẢN PHẨM CẦN CHỈNH SỬA." + ref +
+        " Hãy TẠO LẠI đúng ảnh đó và CHỈ áp dụng thay đổi sau, GIỮ NGUYÊN mọi "
+        "phần khác (sản phẩm, bố cục, các chữ không liên quan, ánh sáng): "
+        + (user_edit or "").strip() +
+        " Giữ sản phẩm nguyên vẹn (đủ mọi bộ phận, đúng chiều, đúng màu trừ khi "
+        "yêu cầu đổi màu), ảnh VUÔNG tỉ lệ 1:1 (1080x1080), CHỤP THẬT không giống "
+        "AI, đúng logic (không méo, tay đúng 5 ngón, chữ có nghĩa đúng chính tả). "
+        + _MODEST
+    )
+
 
 def _lang_note(language: str) -> str:
     """Chỉ thị NGÔN NGỮ cho chữ hiển thị trên ảnh (áp lúc TẠO ảnh).
@@ -123,10 +165,14 @@ def _lang_note(language: str) -> str:
 def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
                         has_scene: bool, notable_details=None,
                         theme: str = "", shop: str = "", logo_img: bool = False,
-                        language: str = "en", n_products: int = 1) -> str:
+                        language: str = "en", n_products: int = 1,
+                        p_type: str = "", variant_index: int = 1) -> str:
     """Ghép prompt cuối: nội dung + giữ nguyên sản phẩm/người + CHÂN THỰC + an toàn."""
     notes = []
     notes.append(_lang_note(language))
+    vnote = _variant_note(p_type, variant_index, n_products)
+    if vnote:
+        notes.append(vnote)
     if theme:
         notes.append(f"Đồng bộ theme thiết kế chung cả bộ: {theme}.")
     if logo_img:
@@ -154,16 +200,14 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
             i = 2
         else:
             # Nhiều ảnh sản phẩm = CÙNG 1 sản phẩm, khác mẫu mã/màu sắc nhưng
-            # chức năng y hệt. Cho model hiểu để không ghép nhầm thành nhiều món.
+            # chức năng y hệt. Cho model hiểu để không ghép nhầm thành nhiều món,
+            # NHƯNG được phép dùng các màu/biến thể khác nhau (không khoá 1 màu).
             parts = [
                 f"Ảnh 1 đến Ảnh {n_products} là CÙNG MỘT sản phẩm nhưng khác "
-                "MẪU MÃ/MÀU SẮC/phiên bản (chức năng, hình dạng, bộ phận GIỐNG "
+                "MÀU SẮC/MẪU MÃ/phiên bản (chức năng, hình dạng, bộ phận GIỐNG "
                 "hệt nhau). Đây KHÔNG phải nhiều sản phẩm khác nhau. Giữ NGUYÊN "
                 "thiết kế, nhãn, chữ, tỉ lệ và ĐẦY ĐỦ mọi bộ phận (dây điện, nút, "
-                "đầu phụ kiện...) đúng như các ảnh mẫu. Trừ khi prompt nói rõ phải "
-                "ghép nhiều biến thể vào một khung, hãy chọn MỘT biến thể tiêu biểu "
-                "(hoặc biến thể mà prompt chỉ định) để dựng ảnh, các biến thể còn "
-                "lại chỉ dùng để hiểu đúng sản phẩm."
+                "đầu phụ kiện...) đúng như các ảnh mẫu."
             ]
             i = n_products + 1
         if has_person:
@@ -239,10 +283,12 @@ async def generate_one(
     shop: str = "",
     logo: Optional[Path] = None,
     language: str = "en",
+    variant_index: int = 1,
 ) -> dict:
     """Tạo 1 ảnh, tải về dest. Trả result {type,label,prompt,image,status,error}.
 
-    `product` nhận 1 ảnh hoặc DANH SÁCH ảnh (cùng sản phẩm, khác mẫu mã/màu)."""
+    `product` nhận 1 ảnh hoặc DANH SÁCH ảnh (cùng sản phẩm, khác mẫu mã/màu).
+    `variant_index`: số thứ tự ảnh trong bộ → xoay vòng chọn biến thể màu."""
     p_type = prompt_obj["type"]
     refs = select_refs(p_type, product, person, scene)
     n_products = len(_product_list(product)) or 1
@@ -251,6 +297,7 @@ async def generate_one(
     final_prompt = _build_final_prompt(
         prompt_obj["prompt"], refs, has_person, has_scene, notable_details,
         theme, shop, logo_img=bool(logo), language=language, n_products=n_products,
+        p_type=p_type, variant_index=variant_index,
     )
 
     last_err = ""

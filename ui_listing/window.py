@@ -945,13 +945,15 @@ class MainWindow(QMainWindow):
         prompt, ref = dlg.get_values()
         if not prompt:
             return
-        conv = card.result.get("conversation_url")
-        if not conv:
+        # SỬA = upload lại chính ẢNH này + prompt (+ ảnh tham chiếu) vào chat mới.
+        # Không còn phụ thuộc link chat cũ nên chỉ cần file ảnh còn trên máy.
+        src_img = card.result.get("image")
+        if not src_img or not Path(src_img).is_file():
             QMessageBox.warning(self, "Không sửa được",
-                                "Ảnh này không có link chat để mở lại.")
+                                "File ảnh gốc không còn trên máy để sửa.")
             return
-        # đường dẫn ảnh mới
-        base = Path(card.result["image"])
+        conv = card.result.get("conversation_url", "")
+        base = Path(src_img)
         dest = base.with_name(f"{base.stem}_edit_{int(time.time())}.png")
         card.btn_edit.setEnabled(False)
         card.btn_edit.setText("Đang sửa...")
@@ -965,9 +967,10 @@ class MainWindow(QMainWindow):
             f"{edit_profile or 'mặc định'}): {prompt[:50]}...")
         self._set_running(True, "Đang sửa ảnh")
 
-        w = EditWorker(conv, prompt, dest,
+        w = EditWorker(src_img, prompt, dest,
                        [Path(ref)] if ref else None,
-                       edit_profile, self.chk_hidden.isChecked())
+                       edit_profile, self.chk_hidden.isChecked(),
+                       conversation_url=conv)
         w.done.connect(lambda p, c=card, ww=w: self._on_edit_done(c, p, ww))
         w.failed.connect(lambda e, c=card, ww=w: self._on_edit_fail(c, e, ww))
         self.edit_workers.append(w)
