@@ -10,7 +10,6 @@ Module này KHÔNG phụ thuộc PySide6 — sau này UI chỉ việc gọi vào
 """
 from __future__ import annotations
 
-import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -25,16 +24,10 @@ from playwright.sync_api import (
 from config import PROFILE_DIR, CHATGPT_URL, SELECTOR_COMPOSER
 
 
-def _centered_window_args(w: int = 1180, h: int = 840):
-    """Vị trí căn GIỮA màn hình cho cửa sổ Chrome (Windows)."""
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        sw, sh = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-        return [f"--window-position={max(0,(sw-w)//2)},{max(0,(sh-h)//2)}",
-                f"--window-size={w},{h}"]
-    except Exception:
-        return [f"--window-size={w},{h}"]
+# Dùng chung với bản async — đã hỗ trợ cả Windows lẫn macOS.
+from core.aio_browser import (  # noqa: E402
+    ANTI_THROTTLE_ARGS, _centered_window_args, kill_profile_chrome,
+)
 
 
 class ChatGPTBrowser:
@@ -67,6 +60,7 @@ class ChatGPTBrowser:
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",  # giảm crash renderer do thiếu bộ nhớ
+                *ANTI_THROTTLE_ARGS,
                 *_centered_window_args(1180, 840),  # cửa sổ căn giữa
             ],
         )
@@ -121,21 +115,8 @@ class ChatGPTBrowser:
                 pass
 
     def _kill_profile_chrome(self) -> None:
-        """(Windows) Tắt tiến trình Chrome đang giữ đúng profile này."""
-        prof = str(self.profile_dir)
-        ps = (
-            "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-            f"Where-Object {{ $_.CommandLine -like '*{prof}*' }} | "
-            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
-            "-ErrorAction SilentlyContinue }"
-        )
-        try:
-            subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
-                timeout=20, capture_output=True,
-            )
-        except Exception:
-            pass
+        """Tắt tiến trình Chrome đang giữ đúng profile này (Win/macOS/Linux)."""
+        kill_profile_chrome(self.profile_dir)
 
     def close(self) -> None:
         """Đóng trình duyệt & giải phóng Playwright."""

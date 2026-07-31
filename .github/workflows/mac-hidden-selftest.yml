@@ -1,0 +1,34 @@
+# ============================================================================
+#  Kiểm CHẾ ĐỘ CHẠY NGẦM (hidden) trên máy Mac THẬT của GitHub — MIỄN PHÍ.
+#
+#  Vì sao cần: macOS KÉO cửa sổ về màn hình khi đặt toạ độ âm (mẹo dùng cho
+#  Windows), nên "chạy ngầm" trên Mac trước đây không có tác dụng. Bài test này
+#  chứng minh cửa sổ thật sự ra khỏi tầm mắt VÀ trang không bị Chrome bóp tốc độ.
+#
+#  Dùng: tab Actions -> "Mac hidden-mode self-test" -> Run workflow.
+# ============================================================================
+name: Mac hidden-mode self-test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "core/aio_browser.py"
+      - "mac_hidden_selftest.py"
+      - ".github/workflows/mac-hidden-selftest.yml"
+
+jobs:
+  hidden:
+    runs-on: macos-14        # Apple Silicon arm64 — giống máy nhân viên
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cài Playwright
+        run: |
+          pip install playwright
+          # Runner macOS có sẵn Google Chrome; tải thêm Chromium làm dự phòng.
+          python -m playwright install chromium
+      - name: Chạy self-test chế độ ẩn trên macOS
+        run: python mac_hidden_selftest.py

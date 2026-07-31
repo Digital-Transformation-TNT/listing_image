@@ -11,8 +11,10 @@ Tối ưu tốc độ: gộp còn 2 message (1 vision đọc ảnh, 1 sinh promp
 """
 from __future__ import annotations
 
+import asyncio
+import math
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from core.aio_chatgpt import AioSession, StopRequested
 from core.jsonutil import parse_json
@@ -21,25 +23,42 @@ from config import (
     USE_PERSON_TYPES, USE_SCENE_TYPES,
 )
 
+_RETRY_MSG = (
+    "Câu trả lời trước chưa đúng định dạng/chưa đủ nội dung. Hãy trả lại DUY NHẤT "
+    "một JSON HỢP LỆ và ĐẦY ĐỦ theo yêu cầu ở trên, bắt đầu bằng { và kết thúc "
+    "bằng }, KHÔNG kèm giải thích, KHÔNG markdown, KHÔNG dấu phẩy thừa."
+)
+
+# Số tab chạy SONG SONG khi sinh prompt (chia nhỏ để rút ngắn thời gian chờ).
+PROMPT_SHARDS = 3
+# Mỗi shard nên có ít nhất ngần này loại, dưới mức đó thì không chia nữa.
+MIN_TYPES_PER_SHARD = 2
+
 
 async def _ask_json(session: AioSession, prompt: str, timeout_ms: int,
-                    retries: int = 4):
-    """Gửi prompt, parse JSON. Hỏi lại nếu lỗi. KHÔNG bao giờ raise vì parse lỗi
-    → trả {} (caller tự lo dự phòng). Vẫn raise StopRequested khi user Dừng."""
-    for i in range(retries):
-        msg = prompt if i == 0 else (
-            "Câu trả lời trước chưa đúng định dạng. Hãy trả lại DUY NHẤT một JSON "
-            "HỢP LỆ theo yêu cầu ở trên, bắt đầu bằng { và kết thúc bằng }, "
-            "KHÔNG kèm giải thích, KHÔNG markdown, KHÔNG dấu phẩy thừa."
-        )
+                    retries: int = 2, validate: Optional[Callable] = None):
+    """Gửi prompt, parse JSON. Hỏi lại TỐI ĐA `retries` lần. KHÔNG bao giờ raise
+    vì parse lỗi → trả {} (caller tự lo dự phòng). Vẫn raise StopRequested.
+
+    `validate(data) -> bool`: chỉ hỏi lại khi nội dung THIẾU thật sự. Trước đây
+    không có bước này nên caller phải lặp thêm vòng ngoài → 3 x 4 = 12 lần hỏi,
+    mỗi lần vài phút.
+    """
+    best = {}
+    for i in range(max(1, retries)):
         try:
-            text = await session.ask_text(msg, timeout_ms=timeout_ms)
-            return parse_json(text)
+            text = await session.ask_text(prompt if i == 0 else _RETRY_MSG,
+                                          timeout_ms=timeout_ms)
+            data = parse_json(text)
+            if validate is None or validate(data):
+                return data
+            if data and not best:
+                best = data
         except StopRequested:
             raise
         except Exception:
             continue
-    return {}
+    return best
 
 # Phong cách/CONCEPT từng loại ảnh — bám cấu trúc listing chuẩn trong promt.docx.
 TYPE_STYLE = {
@@ -50,8 +69,22 @@ TYPE_STYLE = {
     "features": "Bố cục 3-4 TÍNH NĂNG nổi bật quanh sản phẩm, mỗi tính năng 1 icon + 1 cụm từ ngắn; layout gọn gàng, không rối.",
     "how_to_use": "CÁC BƯỚC sử dụng sản phẩm (vd apply → wait → rinse hoặc thao tác thật), đánh số bước, minh hoạ thao tác ĐÚNG CÁCH; chữ ngắn.",
     "detail_info": "CẬN CẢNH chi tiết/chất liệu/kết cấu/thành phần sản phẩm (macro rõ nét); có thẻ thông số kỹ thuật hoặc thành phần trình bày rõ ràng.",
+    "product_info": (
+        "ẢNH INFOGRAPHIC 'THÔNG TIN SẢN PHẨM' (product information sheet) bố cục "
+        "rõ ràng như tờ thông số, KHÔNG phải ảnh chụp lifestyle. Bố cục từ trên "
+        "xuống: (1) TIÊU ĐỀ lớn in đậm ở đầu (vd 'PRODUCT INFORMATION'); (2) khối "
+        "giữa gồm ẢNH SẢN PHẨM CHÍNH đặt trong khung bo tròn, có ĐƯỜNG ĐO KÍCH "
+        "THƯỚC (mũi tên + số đo chiều rộng & chiều cao kèm đơn vị cm) chú thích "
+        "cạnh sản phẩm; BÊN CẠNH là CỘT các BIẾN THỂ (mỗi màu/mùi 1 ảnh nhỏ + tên "
+        "biến thể ghi rõ); (3) khối DANH SÁCH THÔNG SỐ gạch đầu dòng: Tên sản phẩm, "
+        "Mùi hương/biến thể, Quy cách/khối lượng, Thành phần chính; (4) DÒNG LƯU Ý "
+        "nhỏ (chữ nghiêng) ở đáy về cách dùng/an toàn. Nền pastel sạch theo theme, "
+        "khung bo góc mềm, chữ dễ đọc trên điện thoại. CHỈ dùng thông tin THẬT từ "
+        "thuộc tính/nhãn/thông tin người dùng cung cấp, TUYỆT ĐỐI KHÔNG bịa số đo/"
+        "khối lượng/thành phần; trường nào không biết thì BỎ, không ghi 'đang cập nhật'."
+    ),
     "audience": "ĐỐI TƯỢNG phù hợp / TÌNH HUỐNG sử dụng thực tế (ai dùng, dùng ở đâu); người và không gian hợp ngữ cảnh; text nêu nhóm đối tượng.",
-    "closing": "Ảnh CHỐT SALE/tạo niềm tin: kết quả 'như ngoài tiệm tại nhà', CTA ngắn (vd 'Order now') + điểm tin cậy; bố cục mạnh, thúc đẩy mua.",
+    "closing": "Ảnh CHỐT SALE/tạo niềm tin: kết quả 'như ngoài tiệm tại nhà', CTA ngắn (vd 'Order now') + điểm tin cậy; bố cục mạnh, thúc đẩy mua. BẮT BUỘC có nhãn/badge chữ 'FLASH DEAL' (giữ nguyên tiếng Anh, IN HOA) nổi bật để nhấn khuyến mãi.",
 }
 
 
@@ -82,11 +115,23 @@ async def extract_attributes(
     product_path: Path,
     product_info: str = "",
     timeout_ms: int = 120000,
+    product_extra: Optional[List[Path]] = None,
 ) -> dict:
-    """[Message 1 — VISION] Upload ảnh sản phẩm, trích thuộc tính JSON."""
+    """[Message 1 — VISION] Upload ảnh sản phẩm, trích thuộc tính JSON.
+
+    `product_extra`: các ảnh CÙNG sản phẩm khác mẫu mã/màu — upload kèm để model
+    hiểu đúng phạm vi sản phẩm (không coi là nhiều món khác nhau)."""
+    imgs = [Path(product_path)] + [Path(p) for p in (product_extra or [])]
     await session.new_chat()
-    await session.upload_images([Path(product_path)])
+    await session.upload_images(imgs)
     extra = f"\n\nThông tin thêm user cung cấp: {product_info}" if product_info else ""
+    variants = (
+        f"\n\nLƯU Ý: có {len(imgs)} ảnh đính kèm — đây là CÙNG MỘT sản phẩm nhưng "
+        "khác MẪU MÃ/MÀU SẮC/phiên bản (chức năng giống hệt). Hãy trích thuộc tính "
+        "CHUNG cho sản phẩm; nếu các biến thể khác nhau ở màu/kiểu thì liệt kê vào "
+        "'dominant_colors'/'notable_details'. KHÔNG coi là nhiều sản phẩm khác nhau."
+        if len(imgs) > 1 else ""
+    )
     prompt = (
         "Bạn là chuyên gia phân tích sản phẩm cho ảnh quảng cáo. "
         "Nhìn ẢNH sản phẩm này và trích thuộc tính THẬT KỸ. "
@@ -102,11 +147,21 @@ async def extract_attributes(
         '"is_cosmetic":true,"category":"","short_descriptor":"",'
         '"dominant_colors":[],"label_lines_top_to_bottom":[],"exact_label_string":"",'
         '"parts":[{"name":"","color":"","finish":"","shape":""}],'
-        '"notable_details":[],"key_benefits":[]'
+        '"notable_details":[],"key_benefits":[],'
+        '"theme":"<tông màu + kiểu font + phong cách thiết kế dùng chung cho cả '
+        'bộ ảnh listing, 1 câu tiếng Việt>"'
         "}"
+        + variants
         + extra
     )
-    attrs = await _ask_json(session, prompt, timeout_ms)
+    # Lấy luôn 'theme' ở bước nhìn ảnh → các tab sinh prompt song song sau đó
+    # đều bám CÙNG một theme mà không cần thêm lượt hỏi nào.
+    attrs = await _ask_json(
+        session, prompt, timeout_ms,
+        validate=lambda d: isinstance(d, dict) and bool(d.get("product_type")),
+    )
+    if not isinstance(attrs, dict):
+        attrs = {}
     if product_info:
         attrs["user_product_info"] = product_info
     return attrs
@@ -122,9 +177,16 @@ async def generate_prompts(
     has_person: bool = False,
     has_scene: bool = False,
     timeout_ms: int = 200000,
+    theme: str = "",
+    n_products: int = 1,
 ) -> dict:
     """CHỈ sinh prompt (KHÔNG SEO). Nội dung prompt bằng TIẾNG VIỆT để user dễ sửa;
-    chữ HIỂN THỊ TRÊN ẢNH theo image_lang (en/vi)."""
+    chữ HIỂN THỊ TRÊN ẢNH theo image_lang (en/vi).
+
+    `theme`: nếu đã có sẵn (từ bước đọc ảnh) thì BẮT theo đúng theme đó — nhờ vậy
+    nhiều tab sinh prompt song song vẫn cho ra một bộ ảnh đồng bộ.
+    `n_products`: số ảnh sản phẩm (biến thể màu/mẫu) → nhắc prompt thể hiện đa dạng.
+    """
     style_lines = []
     for t in types:
         label = PROMPT_TYPE_LABELS.get(t, t)
@@ -133,6 +195,16 @@ async def generate_prompts(
     img_txt = "TIẾNG ANH" if image_lang == "en" else "TIẾNG VIỆT"
 
     refs_note = []
+    if n_products > 1:
+        refs_note.append(
+            f"- CÓ {n_products} ẢNH SẢN PHẨM = CÙNG một sản phẩm, khác MÀU/MẪU MÃ "
+            "(chức năng như nhau). Hãy để CÁC ẢNH KHÁC NHAU thể hiện các MÀU/BIẾN "
+            "THỂ KHÁC NHAU để khoe đủ dải sản phẩm — KHÔNG bắt cả bộ chung 1 màu, "
+            "KHÔNG mặc định chỉ dùng ảnh đầu tiên. Ảnh bìa (thumbnail), tính năng "
+            "(features), đối tượng (audience) NÊN cho thấy NHIỀU màu cùng lúc; các "
+            "ảnh còn lại mỗi ảnh chọn 1 màu/biến thể khác nhau. Nêu rõ màu/biến thể "
+            "trong prompt."
+        )
     if has_person:
         person_labels = ", ".join(
             f"{t} ({PROMPT_TYPE_LABELS.get(t, t)})"
@@ -164,11 +236,18 @@ async def generate_prompts(
     refs_block = ("\nKHI CÓ ẢNH THAM CHIẾU (viết prompt DÀI & CHI TIẾT hơn cho các loại liên quan):\n"
                   + "\n".join(refs_note)) if refs_note else ""
 
+    theme_line = (
+        f"THEME BẮT BUỘC (dùng CHÍNH XÁC theme này cho mọi prompt, không tự đổi): "
+        f"{theme}"
+        if theme else
+        "THEME: tự chọn 1 theme (tông màu/font/phong cách) rồi áp cho mọi prompt."
+    )
     parts = [
         "Đóng vai chuyên gia thiết kế ảnh listing cho sàn TMĐT. Dựa vào thuộc "
         "tính sản phẩm (JSON), viết prompt tạo ảnh cho từng loại.",
         f"THUỘC TÍNH: {attributes}",
         f"SHOP: {shop or '(không có)'}",
+        theme_line,
         "",
         f"Tạo prompt cho ĐÚNG các loại (giữ thứ tự): {types}",
         "Vai trò/concept từng loại:",
@@ -188,12 +267,18 @@ async def generate_prompts(
         '  "theme": "<mô tả ngắn theme màu/font/phong cách dùng chung cả bộ, tiếng Việt>",',
         '  "prompts": [ {"type":"<loại>","label":"<tên VN>","prompt":"<prompt tiếng Việt, chữ overlay theo ngôn ngữ ảnh>","content":""} ]',
         "}",
-        "Yêu cầu: đủ số loại; MỖI PROMPT DÀI 70-130 từ tiếng Việt, chi tiết môi "
-        "trường/chất liệu/ánh sáng; nhấn ảnh CHỤP THẬT không giống AI + ĐÚNG LOGIC "
-        "(không méo, tay đúng 5 ngón, chữ có nghĩa); giữ đủ bộ phận sản phẩm đúng "
-        "chiều. Không placeholder.",
+        f"Yêu cầu: PHẢI CÓ ĐỦ {len(types)} loại; MỖI PROMPT DÀI 70-130 từ tiếng "
+        "Việt, chi tiết môi trường/chất liệu/ánh sáng; nhấn ảnh CHỤP THẬT không "
+        "giống AI + ĐÚNG LOGIC (không méo, tay đúng 5 ngón, chữ có nghĩa); giữ đủ "
+        "bộ phận sản phẩm đúng chiều. Không placeholder. Bỏ trường 'content' "
+        "(để chuỗi rỗng) — đừng viết thêm gì ngoài JSON.",
     ]
-    return await _ask_json(session, "\n".join(parts), timeout_ms)
+
+    def _ok(d):
+        return (isinstance(d, dict)
+                and len(_clean_prompts(d.get("prompts"), types)) >= len(types))
+
+    return await _ask_json(session, "\n".join(parts), timeout_ms, validate=_ok)
 
 
 async def generate_seo(
@@ -280,7 +365,11 @@ async def generate_seo(
         "}",
         "}",
     ]
-    data = await _ask_json(session, "\n".join(parts), timeout_ms)
+    def _ok(d):
+        s = d.get("seo", d) if isinstance(d, dict) else {}
+        return isinstance(s, dict) and bool(s.get("title") and s.get("description"))
+
+    data = await _ask_json(session, "\n".join(parts), timeout_ms, validate=_ok)
     seo = data.get("seo", data) if isinstance(data, dict) else {}
     if isinstance(seo, dict) and "attributes" in seo:
         from core.store import clean_seo_attrs
@@ -335,6 +424,15 @@ def _fallback_prompts(types, attributes, image_lang):
     return out
 
 
+def _split_types(types: List[str], shards: int) -> List[List[str]]:
+    """Chia đều danh sách loại ảnh cho các tab (giữ nguyên thứ tự)."""
+    if shards <= 1 or len(types) < MIN_TYPES_PER_SHARD * 2:
+        return [list(types)]
+    shards = min(shards, len(types) // MIN_TYPES_PER_SHARD)
+    size = math.ceil(len(types) / shards)
+    return [types[i:i + size] for i in range(0, len(types), size)]
+
+
 async def make_prompts(
     session: AioSession,
     product_path: Path,
@@ -346,20 +444,64 @@ async def make_prompts(
     attributes: Optional[dict] = None,
     has_person: bool = False,
     has_scene: bool = False,
+    extra_sessions: Optional[List[AioSession]] = None,
+    product_extra: Optional[List[Path]] = None,
 ) -> dict:
-    """Trích thuộc tính + sinh PROMPT (tiếng Việt). Không SEO. KHÔNG bao giờ rỗng."""
-    attrs = attributes or await extract_attributes(session, product_path, product_info)
-    data = {}
-    clean = []
-    for _ in range(3):
-        data = await generate_prompts(session, attrs, types, image_lang, shop,
-                                      market, has_person, has_scene)
-        clean = _clean_prompts(data.get("prompts"), types)
-        if len(clean) >= len(types):
-            break
-    if not clean:   # AI trả hỏng → dùng prompt mẫu để user sửa (không văng lỗi)
-        clean = _fallback_prompts(types, attrs, image_lang)
-    return {"attributes": attrs, "theme": data.get("theme", ""), "prompts": clean}
+    """Trích thuộc tính + sinh PROMPT (tiếng Việt). Không SEO. KHÔNG bao giờ rỗng.
+
+    `extra_sessions`: các tab phụ. Có tab phụ thì 9 loại ảnh được CHIA ĐỀU cho
+    các tab và sinh SONG SONG → thời gian chờ giảm gần bằng 1/số tab (câu trả
+    lời dài ~1000 từ là nút cổ chai lớn nhất của bước này).
+    `product_extra`: ảnh sản phẩm phụ (khác mẫu mã) — upload kèm ở mọi tab.
+    """
+    prod_imgs = [Path(product_path)] + [Path(p) for p in (product_extra or [])]
+    attrs = attributes or await extract_attributes(
+        session, product_path, product_info, product_extra=product_extra)
+    theme = ""
+    if isinstance(attrs, dict):
+        theme = str(attrs.pop("theme", "") or "")
+
+    sessions = [session] + [s for s in (extra_sessions or []) if s is not None]
+    shards = _split_types(list(types), min(PROMPT_SHARDS, len(sessions)))
+    sessions = sessions[:len(shards)]
+
+    async def _shard(sess: AioSession, sub: List[str], first: bool) -> list:
+        if not first:
+            # tab phụ: mở chat mới + đưa ảnh sản phẩm vào cho model "nhìn" thấy
+            await sess.new_chat()
+            try:
+                await sess.upload_images(prod_imgs)
+            except Exception:
+                pass
+        data = await generate_prompts(sess, attrs, sub, image_lang, shop, market,
+                                      has_person, has_scene, theme=theme,
+                                      n_products=len(prod_imgs))
+        return _clean_prompts((data or {}).get("prompts"), sub)
+
+    if len(shards) == 1:
+        got = [await _shard(sessions[0], shards[0], True)]
+    else:
+        got = await asyncio.gather(
+            *[_shard(s, sub, i == 0) for i, (s, sub) in enumerate(zip(sessions, shards))],
+            return_exceptions=True,
+        )
+
+    by_type = {}
+    for res in got:
+        if isinstance(res, BaseException):
+            if isinstance(res, StopRequested):
+                raise res
+            continue
+        for p in res:
+            by_type.setdefault(p["type"], p)
+
+    # loại nào vẫn thiếu → điền prompt mẫu để user tự sửa (không văng lỗi)
+    missing = [t for t in types if t not in by_type]
+    for p in _fallback_prompts(missing, attrs, image_lang):
+        by_type[p["type"]] = p
+
+    clean = [by_type[t] for t in types if t in by_type]
+    return {"attributes": attrs, "theme": theme, "prompts": clean}
 
 
 async def make_seo(
@@ -386,11 +528,14 @@ async def analyze(
     shop: str = "",
     market: str = DEFAULT_MARKET,
     want_seo: bool = True,
+    product_extra: Optional[List[Path]] = None,
 ) -> dict:
     """CLI: attributes + prompts (+ seo nếu want_seo). Dùng chung extract 1 lần."""
-    attrs = await extract_attributes(session, product_path, product_info)
+    attrs = await extract_attributes(session, product_path, product_info,
+                                     product_extra=product_extra)
     p = await make_prompts(session, product_path, types, language, product_info,
-                           shop, market, attributes=attrs)
+                           shop, market, attributes=attrs,
+                           product_extra=product_extra)
     seo = {}
     if want_seo:
         try:

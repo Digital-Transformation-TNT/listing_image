@@ -20,6 +20,12 @@ dist_app/
 # Ảnh dữ liệu thử nghiệm (nặng, là dữ liệu nội bộ)
 data/san_pham/
 data/nguoi_mau/
+data/test/
+
+# File tạm do editor/tool sinh ra
+*.tmp
+*.tmp.*
+*.orig
 
 # Môi trường ảo dựng lúc build trên Mac
 .venv/

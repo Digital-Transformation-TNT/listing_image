@@ -15,8 +15,12 @@ from typing import Callable, List, Optional
 
 from core.aio_browser import AioBrowser
 from core.aio_chatgpt import AioSession, StopRequested
-from core.analyzer import analyze, make_prompts, make_seo, generate_seo
-from core.generator import generate_one, to_square
+from core.analyzer import (
+    analyze, make_prompts, make_seo, generate_seo, PROMPT_SHARDS,
+)
+from core.generator import (
+    generate_one, to_square, to_ratio, build_edit_prompt,
+)
 from core.qc import qc_image
 from core import store
 from config import (
@@ -59,11 +63,13 @@ async def run_pipeline(
     headless: bool = False,
     hidden: bool = False,
     profile_dir: Optional[Path] = None,
+    product_extra: Optional[List[Path]] = None,
     progress: ProgressCB = None,
 ) -> dict:
     """Chạy trọn pipeline (analyze + tạo ảnh), trả về dict tổng hợp + zip."""
     types = types or list(DEFAULT_TYPES)
     types = [t for t in types if t in PROMPT_TYPE_KEYS][:quantity]
+    products = [product] + [p for p in (product_extra or [])]
 
     br = AioBrowser(headless=headless, hidden=hidden,
                     **({"profile_dir": profile_dir} if profile_dir else {}))
@@ -77,7 +83,8 @@ async def run_pipeline(
 
         _emit(progress, "analyze_start", {})
         analysis = await analyze(
-            s0, product, types, language, product_info, shop, market, want_seo
+            s0, product, types, language, product_info, shop, market, want_seo,
+            product_extra=product_extra,
         )
         prompts = _filter_prompts(analysis["prompts"], types, quantity)
         theme = analysis.get("theme", "")
@@ -86,7 +93,7 @@ async def run_pipeline(
             raise RuntimeError("Không sinh được prompt nào.")
 
         return await _finish_generate(
-            br, s0, prompts, product, person, scene,
+            br, s0, prompts, products, person, scene,
             analysis.get("attributes", {}), theme, shop,
             analysis.get("seo", {}), concurrency, qc, output_base, progress,
             language=language,
@@ -121,7 +128,8 @@ async def _finish_generate(br, first_session, prompts, product, person, scene,
             res = await generate_one(
                 sess, prompt_obj, product, person, scene, dest=dest,
                 notable_details=(attributes or {}).get("notable_details"),
-                theme=theme, shop=shop, logo=logo,
+                theme=theme, shop=shop, logo=logo, language=language,
+                variant_index=idx,
             )
             if qc and res["status"] == "success":
                 res["qc"] = await qc_image(sess, res["image"], attributes or {})
@@ -159,6 +167,7 @@ async def make_prompts_pipeline(product: Path, types=None,
                                 profile_dir: Optional[Path] = None,
                                 cancel=None, has_person: bool = False,
                                 has_scene: bool = False,
+                                product_extra: Optional[List[Path]] = None,
                                 progress: ProgressCB = None) -> dict:
     """Nút '① Tạo prompt' — CHỉ sinh prompt (tiếng Việt), KHÔNG SEO."""
     types = types or list(DEFAULT_TYPES)
@@ -173,10 +182,21 @@ async def make_prompts_pipeline(product: Path, types=None,
             raise RuntimeError("Chưa đăng nhập ChatGPT.")
         s0 = AioSession(page0)
         s0.cancel = cancel
+        # Mở sẵn vài tab phụ để CHIA NHỎ việc sinh prompt chạy song song.
+        extra = []
+        n_extra = min(PROMPT_SHARDS, max(1, len(types) // 2)) - 1
+        for _ in range(max(0, n_extra)):
+            try:
+                s = AioSession(await br.new_page())
+                s.cancel = cancel
+                extra.append(s)
+            except Exception:
+                break
         _emit(progress, "analyze_start", {})
         res = await make_prompts(s0, product, types, language, product_info,
                                  shop, market, has_person=has_person,
-                                 has_scene=has_scene)
+                                 has_scene=has_scene, extra_sessions=extra,
+                                 product_extra=product_extra)
         res["prompts"] = _filter_prompts(res["prompts"], types, quantity)
         _emit(progress, "analyze_done", {"n_prompts": len(res["prompts"])})
         return res
@@ -209,20 +229,30 @@ async def make_seo_pipeline(product: Path, product_info: str = "", shop: str = "
 
 
 # --- Nhận diện "hết lượt Free" -------------------------------------------- #
+# Cụm từ ĐẶC TRƯNG. Bản cũ dùng các từ quá chung ("limit", "maximum",
+# "image generation", "come back") nên chữ trong chính câu trả lời của ChatGPT
+# cũng khớp → tưởng hết lượt → đổi tài khoản oan, mỗi lần mất ~30s khởi động.
 _LIMIT_HINTS = [
-    "limit", "reached", "hết lượt", "giới hạn", "upgrade", "try again later",
-    "you've hit", "you've reached", "reached your", "maximum", "rate limit",
-    "please wait", "come back later", "come back", "try again in",
-    "please try again", "create more images", "image generation",
-    "quá nhiều yêu cầu", "hạn mức", "vui lòng thử lại",
+    "you've hit the limit", "you've reached", "reached your limit",
+    "hit your limit", "usage limit", "rate limit", "limit reached",
+    "try again later", "try again in", "come back later",
+    "upgrade to chatgpt", "image generation limit",
+    "hết lượt", "đã đạt giới hạn", "giới hạn sử dụng", "hạn mức",
+    "vui lòng thử lại sau", "quá nhiều yêu cầu",
 ]
 # Số ảnh LỖI LIÊN TIẾP để tự coi là hết lượt/hỏng (dù không nhận ra câu báo).
 _FAIL_STREAK = 3
 
 
-async def _page_has_limit(page) -> bool:
+async def _session_hit_limit(sess) -> bool:
+    """Hết lượt? Ưu tiên mã HTTP 403/429 (chắc chắn), sau đó mới dò chữ."""
     try:
-        txt = (await page.inner_text("main")).lower()
+        if sess.hit_limit():
+            return True
+    except Exception:
+        pass
+    try:
+        txt = (await sess.page.inner_text("main")).lower()
         return any(h in txt for h in _LIMIT_HINTS)
     except Exception:
         return False
@@ -230,7 +260,8 @@ async def _page_has_limit(page) -> bool:
 
 async def _batch_account(br, page0, items, product, person, scene, attributes,
                          theme, shop, concurrency, qc, sdir, total, base_done,
-                         progress, cancel=None, logo=None):
+                         progress, cancel=None, logo=None, language="vi",
+                         profile_name=""):
     """Chạy các job bằng 1 tài khoản; dừng khi HẾT LƯỢT hoặc user HỦY.
     Trả (done, remaining, limit). Raise StopRequested nếu user hủy."""
     conc = max(1, min(concurrency, len(items)))
@@ -275,8 +306,11 @@ async def _batch_account(br, page0, items, product, person, scene, attributes,
                 res = await generate_one(
                     sess, prompt_obj, product, person, scene, dest=dest,
                     notable_details=(attributes or {}).get("notable_details"),
-                    theme=theme, shop=shop, logo=logo,
+                    theme=theme, shop=shop, logo=logo, language=language,
+                    variant_index=idx,
                 )
+                # đóng dấu TÀI KHOẢN đã tạo ảnh này → lúc sửa mở đúng tài khoản
+                res["profile"] = profile_name
                 if res["status"] == "success":
                     if qc:
                         res["qc"] = await qc_image(sess, res["image"], attributes or {})
@@ -285,7 +319,7 @@ async def _batch_account(br, page0, items, product, person, scene, attributes,
                         done[idx] = res
                         _emit_img(idx, prompt_obj, res)
                 else:
-                    is_limit = await _page_has_limit(sess.page)
+                    is_limit = await _session_hit_limit(sess)
                     async with lock:
                         consec["n"] += 1
                         streak = consec["n"]
@@ -320,6 +354,7 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
                                 logo: Optional[Path] = None,
                                 want_seo: bool = False, product_info: str = "",
                                 language: str = "vi",
+                                product_extra: Optional[List[Path]] = None,
                                 progress: ProgressCB = None) -> dict:
     """Tạo ảnh từ prompt cho sẵn, TỰ XOAY qua các tài khoản khi hết lượt.
 
@@ -334,6 +369,8 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
     items = [(i + 1, p) for i, p in enumerate(prompts)]
     n = len(items)
     profiles = profiles or [(None, "default")]
+    # gộp ảnh sản phẩm chính + các mẫu mã phụ → 1 danh sách để upload khi tạo ảnh
+    products = [product] + [p for p in (product_extra or [])]
 
     sid, sdir = store.new_session_dir(output_base)
     store.write_prompts(sdir, prompts)
@@ -362,42 +399,73 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
                 _emit(progress, "account_skip",
                       {"profile": prof_name, "reason": "chưa đăng nhập"})
                 continue
+            seo_task = None
             if seo_needed:
                 _emit(progress, "seo_start", {})
-                try:
-                    seo_page = await br.new_page()
-                    ss = AioSession(seo_page)
-                    ss.cancel = cancel
-                    if attributes:
-                        if product_info and not attributes.get("user_product_info"):
-                            attributes = {**attributes,
-                                          "user_product_info": product_info}
-                        await ss.new_chat()
-                        seo_result = await generate_seo(
-                            ss, attributes, shop, market, language)
-                    else:
+                if attributes:
+                    # Đã có thuộc tính → viết SEO ở tab riêng CHẠY SONG SONG với
+                    # việc tạo ảnh (trước đây phải chờ xong SEO mới tạo ảnh,
+                    # mất thêm 1-2 phút chết).
+                    if product_info and not attributes.get("user_product_info"):
+                        attributes = {**attributes,
+                                      "user_product_info": product_info}
+
+                    async def _seo_job(attrs=attributes):
+                        seo_page = await br.new_page()
+                        ss = AioSession(seo_page)
+                        ss.cancel = cancel
+                        try:
+                            await ss.new_chat()
+                            return await generate_seo(ss, attrs, shop, market,
+                                                      language)
+                        finally:
+                            try:
+                                await seo_page.close()
+                            except Exception:
+                                pass
+
+                    seo_task = asyncio.ensure_future(_seo_job())
+                else:
+                    # Chưa có thuộc tính → phải phân tích ảnh trước, và khâu tạo
+                    # ảnh cũng cần thuộc tính đó → giữ tuần tự.
+                    try:
+                        seo_page = await br.new_page()
+                        ss = AioSession(seo_page)
+                        ss.cancel = cancel
                         r = await make_seo(ss, product, product_info, shop,
                                            market, language)
                         if isinstance(r, dict):
                             seo_result = r.get("seo", {}) or {}
                             attributes = attributes or r.get("attributes", {})
-                    seo_needed = False
-                    _emit(progress, "seo_done", {})
+                        seo_needed = False
+                        _emit(progress, "seo_done", {})
+                        try:
+                            await seo_page.close()
+                        except Exception:
+                            pass
+                    except StopRequested:
+                        user_stopped = True
+                        break
+                    except Exception as e:
+                        _emit(progress, "account_error",
+                              {"profile": prof_name, "error": repr(e)})
+            try:
+                done, remaining, limit_hit = await _batch_account(
+                    br, page0, remaining, products, person, scene, attributes, theme,
+                    shop, concurrency, qc, sdir, n, len(results_by_idx), progress,
+                    cancel, logo, language=language, profile_name=prof_name,
+                )
+            finally:
+                if seo_task is not None:
                     try:
-                        await seo_page.close()
-                    except Exception:
-                        pass
-                except StopRequested:
-                    user_stopped = True
-                    break
-                except Exception as e:
-                    _emit(progress, "account_error",
-                          {"profile": prof_name, "error": repr(e)})
-            done, remaining, limit_hit = await _batch_account(
-                br, page0, remaining, product, person, scene, attributes, theme,
-                shop, concurrency, qc, sdir, n, len(results_by_idx), progress,
-                cancel, logo,
-            )
+                        seo_result = await seo_task or seo_result
+                        seo_needed = False
+                        _emit(progress, "seo_done", {})
+                    except StopRequested:
+                        user_stopped = True
+                    except Exception as e:
+                        _emit(progress, "account_error",
+                              {"profile": prof_name, "error": repr(e)})
             results_by_idx.update(done)
             if limit_hit:
                 _emit(progress, "account_limit",
@@ -439,15 +507,24 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
 
 
 async def edit_image(
-    conversation_url: str,
+    image_path,
     edit_prompt: str,
     dest: Path,
     extra_images: Optional[List[Path]] = None,
     profile_dir: Optional[Path] = None,
     hidden: bool = False,
     headless: bool = False,
+    conversation_url: str = "",   # giữ để tương thích; không bắt buộc
 ) -> Optional[str]:
-    """Mở lại đúng cuộc chat, gửi prompt sửa → tải ảnh MỚI (vuông) về dest."""
+    """SỬA ẢNH bằng cách UPLOAD ẢNH CẦN SỬA (+ ảnh tham chiếu) + prompt vào 1 CHAT
+    MỚI, rồi tải ảnh MỚI về dest.
+
+    Cách cũ mở lại chat cũ theo URL hay hỏng (sai tài khoản / chat không nạp /
+    model không nhớ ngữ cảnh) → 'không sửa được'. Upload thẳng ảnh cần sửa thì
+    chắc chắn model có đúng ảnh để chỉnh, không phụ thuộc chat cũ."""
+    img = Path(image_path)
+    if not img.is_file():
+        raise RuntimeError(f"Không tìm thấy ảnh cần sửa: {img}")
     br = AioBrowser(headless=headless, hidden=hidden,
                     **({"profile_dir": profile_dir} if profile_dir else {}))
     await br.start()
@@ -457,8 +534,16 @@ async def edit_image(
         if not await br.is_logged_in(page, timeout_ms=20000):
             raise RuntimeError("Chưa đăng nhập ChatGPT.")
         s = AioSession(page)
-        await s.open_conversation(conversation_url)
-        src = await s.refine(edit_prompt, extra_images)
+        await s.new_chat()
+        refs = [img] + [Path(p) for p in (extra_images or []) if p]
+        await s.upload_images(refs)
+        prompt = build_edit_prompt(edit_prompt, has_ref=bool(extra_images))
+        baseline = set(await s.generated_srcs())
+        await s.type_prompt(prompt)
+        if not await s.send():
+            return None
+        await s.page.wait_for_timeout(400)
+        src = await s.wait_for_image(timeout_ms=240000, baseline=baseline)
         if not src:
             return None
         out = Path(dest)
@@ -470,6 +555,211 @@ async def edit_image(
         return str(out)
     finally:
         await br.close()
+
+
+def _apply_batch_ratio(out: Path, ratio: str) -> None:
+    """Ép tỉ lệ khung cho ảnh sửa hàng loạt (an toàn, nuốt lỗi)."""
+    try:
+        if ratio == "1:1":
+            to_square(out)
+        elif ratio == "16:9":
+            to_ratio(out, 16, 9)
+        elif ratio == "9:16":
+            to_ratio(out, 9, 16)
+    except Exception:
+        pass
+
+
+async def _edit_one_batch(sess, image_path, edit_prompt: str, dest: Path,
+                          ratio: str = "") -> dict:
+    """Sửa 1 ảnh: chat mới → upload đúng ảnh đó + prompt → chờ ảnh mới → tải về.
+
+    Trả result dict tương thích ResultCard (image/label/type/status/...)."""
+    img = Path(image_path)
+    label = img.name
+    base = {"type": "batch_edit", "label": label, "prompt": edit_prompt,
+            "conversation_url": "", "error": ""}
+    if not img.is_file():
+        return {**base, "image": None, "status": "error",
+                "error": "không tìm thấy ảnh"}
+    try:
+        await sess.new_chat()
+        await sess.upload_images([img])
+        baseline = set(await sess.generated_srcs())
+        await sess.type_prompt(edit_prompt)
+        if not await sess.send():
+            return {**base, "image": None, "status": "error", "error": "send failed"}
+        await sess.page.wait_for_timeout(400)
+        src = await sess.wait_for_image(timeout_ms=240000, baseline=baseline)
+        if not src:
+            return {**base, "image": None, "status": "error", "error": "no image"}
+        out = Path(dest)
+        await sess.download_image(src, out)
+        _apply_batch_ratio(out, ratio)
+        return {**base, "image": str(out), "status": "success",
+                "conversation_url": sess.conversation_url()}
+    except StopRequested:
+        raise
+    except Exception as e:
+        return {**base, "image": None, "status": "error", "error": repr(e)}
+
+
+async def _batch_edit_account(br, page0, items, edit_prompt, sdir, total,
+                              base_done, ratio, concurrency, cancel, progress,
+                              profile_name=""):
+    """Sửa hàng loạt bằng 1 tài khoản (nhiều tab song song). Dừng khi HẾT LƯỢT
+    hoặc user HỦY. Trả (done, remaining, limit). Raise StopRequested nếu hủy."""
+    conc = max(1, min(concurrency, len(items)))
+    pool: asyncio.Queue = asyncio.Queue()
+    sess0 = AioSession(page0)
+    sess0.cancel = cancel
+    pool.put_nowait(sess0)
+    for _ in range(conc - 1):
+        s = AioSession(await br.new_page())
+        s.cancel = cancel
+        pool.put_nowait(s)
+    q: asyncio.Queue = asyncio.Queue()
+    for it in items:
+        q.put_nowait(it)
+    done = {}
+    limit_event = asyncio.Event()
+    lock = asyncio.Lock()
+    consec = {"n": 0}
+    stopped = {"v": False}
+
+    def _emit_img(idx, res):
+        _emit(progress, "image_done", {
+            "idx": idx, "done": base_done + len(done), "total": total,
+            "type": res.get("type", "batch_edit"), "status": res["status"],
+            "image": res.get("image"),
+        })
+
+    async def worker():
+        while not limit_event.is_set():
+            if cancel is not None and cancel.is_set():
+                stopped["v"] = True
+                limit_event.set()
+                return
+            try:
+                idx, path = q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            sess = await pool.get()
+            try:
+                dest = sdir / f"{idx:02d}_{Path(path).stem}_edit.png"
+                res = await _edit_one_batch(sess, path, edit_prompt, dest, ratio)
+                res["profile"] = profile_name
+                if res["status"] == "success":
+                    async with lock:
+                        consec["n"] = 0
+                        done[idx] = res
+                        _emit_img(idx, res)
+                else:
+                    is_limit = await _session_hit_limit(sess)
+                    async with lock:
+                        consec["n"] += 1
+                        streak = consec["n"]
+                    if is_limit or streak >= _FAIL_STREAK:
+                        q.put_nowait((idx, path))
+                        limit_event.set()
+                        return
+                    async with lock:
+                        done[idx] = res
+                        _emit_img(idx, res)
+            except StopRequested:
+                stopped["v"] = True
+                q.put_nowait((idx, path))
+                limit_event.set()
+                return
+            finally:
+                pool.put_nowait(sess)
+
+    await asyncio.gather(*[worker() for _ in range(conc)])
+    if stopped["v"]:
+        raise StopRequested()
+    remaining = [(idx, p) for (idx, p) in items if idx not in done]
+    return done, remaining, limit_event.is_set()
+
+
+async def batch_edit_images(images, edit_prompt: str, ratio: str = "",
+                            profiles=None, concurrency: int = DEFAULT_CONCURRENCY,
+                            hidden: bool = False, output_base: Path = OUTPUT_DIR,
+                            cancel=None, progress: ProgressCB = None) -> dict:
+    """SỬA HÀNG LOẠT: mỗi ảnh gửi riêng (1 ảnh + CÙNG 1 prompt) vào ChatGPT, chạy
+    SONG SONG theo `concurrency`, TỰ XOAY tài khoản khi hết lượt (giống tạo ảnh).
+
+    Trả dict {dir, results, ok_count, total} — results tương thích gallery cũ."""
+    images = [Path(p) for p in (images or []) if p]
+    if not images:
+        raise RuntimeError("Không có ảnh để sửa.")
+    if not (edit_prompt or "").strip():
+        raise RuntimeError("Chưa có yêu cầu sửa (prompt rỗng).")
+    items = list(enumerate(images, 1))          # (idx, path)
+    n = len(items)
+    profiles = profiles or [(None, "default")]
+
+    sid, sdir = store.new_session_dir(output_base)
+    results_by_idx = {}
+    remaining = list(items)
+    user_stopped = False
+    _emit(progress, "generate_start", {"total": n, "concurrency": concurrency})
+
+    for profile_dir, prof_name in profiles:
+        if not remaining or user_stopped:
+            break
+        if cancel is not None and cancel.is_set():
+            user_stopped = True
+            break
+        _emit(progress, "account", {"profile": prof_name, "remaining": len(remaining)})
+        br = AioBrowser(hidden=hidden,
+                        **({"profile_dir": profile_dir} if profile_dir else {}))
+        try:
+            await br.start()
+            page0 = await br.first_page()
+            await br.open_chatgpt(page0)
+            if not await br.is_logged_in(page0, timeout_ms=15000):
+                _emit(progress, "account_skip",
+                      {"profile": prof_name, "reason": "chưa đăng nhập"})
+                continue
+            done, remaining, limit_hit = await _batch_edit_account(
+                br, page0, remaining, edit_prompt, sdir, n, len(results_by_idx),
+                ratio, concurrency, cancel, progress, profile_name=prof_name,
+            )
+            results_by_idx.update(done)
+            if limit_hit:
+                _emit(progress, "account_limit",
+                      {"profile": prof_name, "remaining": len(remaining)})
+        except StopRequested:
+            user_stopped = True
+        except Exception as e:
+            _emit(progress, "account_error",
+                  {"profile": prof_name, "error": repr(e)})
+        finally:
+            await br.close()
+
+    if user_stopped:
+        _emit(progress, "stopped", {"remaining": len(remaining)})
+    elif remaining:
+        _emit(progress, "exhausted", {"remaining": len(remaining)})
+
+    results = []
+    for idx, path in items:
+        if idx in results_by_idx:
+            results.append(results_by_idx[idx])
+        else:
+            results.append({
+                "type": "batch_edit", "label": Path(path).name,
+                "prompt": edit_prompt, "image": None, "status": "skipped",
+                "conversation_url": "", "error": "hết tài khoản", "profile": "",
+            })
+
+    out = {
+        "session_id": sid, "dir": str(sdir), "results": results,
+        "ok_count": sum(1 for r in results if r["status"] == "success"), "total": n,
+    }
+    store.write_results(sdir, out)
+    _emit(progress, "done", {"ok": out["ok_count"], "total": n})
+    return out
 
 
 async def _read_session_email(page) -> str:

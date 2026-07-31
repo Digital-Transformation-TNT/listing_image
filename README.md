@@ -5,7 +5,18 @@ Tạo bộ ảnh listing sản phẩm + SEO cho **TikTok Shop** bằng cách lá
 
 > ⚠️ Tự động hoá ChatGPT là vùng xám ToS. Dùng vừa phải, xoay tài khoản khi hết
 > lượt Free. Chạy `headless` bị Cloudflare chặn → dùng chế độ hiện cửa sổ hoặc
-> **`hidden`** (cửa sổ ra ngoài màn hình = chạy ngầm).
+> **`hidden`** (chạy ngầm).
+
+### Chạy ngầm (`hidden`) khác nhau theo hệ điều hành
+
+| OS | Cách ẩn | Ghi chú |
+|----|---------|---------|
+| Windows | Đặt cửa sổ ở toạ độ âm (ngoài màn hình) | trong suốt với người dùng |
+| macOS | macOS **kéo cửa sổ về lại màn hình** khi toạ độ âm → app tự **thu nhỏ cửa sổ xuống Dock** | đừng bấm mở lại cửa sổ đó khi đang chạy |
+
+Kèm các cờ chống "ngủ đông" (`--disable-backgrounding-occluded-windows`,
+`--disable-renderer-backgrounding`, `--disable-background-timer-throttling`) để
+Chrome không bóp tốc độ tab đang ẩn — thiếu chúng thì ChatGPT đứng giữa chừng.
 
 ## Chức năng (theo promt.docx — chuẩn TikTok Shop PH)
 
@@ -69,5 +80,12 @@ Máy đích cần chạy `playwright install chrome` (browser không nhúng tron
 
 ```bash
 python tests/test_unit.py          # logic thuần (không cần trình duyệt)
+python tests/test_features.py      # ép chữ EN, nhiều ảnh SP, sửa ảnh đúng tài khoản
+python tests/test_ask_text.py      # chống lỗi "hỏi đi hỏi lại mãi" (trang giả)
+python tests/test_send.py          # chống treo khi ảnh chưa upload xong (nút gửi)
+python mac_hidden_selftest.py      # chế độ chạy ngầm có thật sự ẩn + không bị bóp tốc độ
 python tests/test_integration.py   # luồng thật (cần đăng nhập)
 ```
+
+`mac_hidden_selftest.py` cũng chạy tự động trên máy Mac thật của GitHub Actions:
+tab **Actions → "Mac hidden-mode self-test"**.

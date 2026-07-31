@@ -32,6 +32,32 @@ def overlay_logo(image_path: Path, logo_path: Path,
         pass
 
 
+def to_ratio(path: Path, rw: int, rh: int) -> None:
+    """Ép ảnh về đúng tỉ lệ rw:rh bằng cách ĐỆM viền (không cắt mất nội dung).
+
+    Chỉ đệm thêm cho đủ khung nên nếu ChatGPT đã trả gần đúng tỉ lệ thì phần
+    đệm rất nhỏ. Màu đệm lấy trung bình 4 góc để hòa với nền."""
+    img = Image.open(path).convert("RGB")
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return
+    target = rw / rh
+    cur = w / h
+    if abs(cur - target) < 0.01:
+        img.save(path)
+        return
+    if cur < target:                 # quá cao/hẹp → nới CHIỀU RỘNG
+        new_w, new_h = int(round(h * target)), h
+    else:                            # quá rộng → nới CHIỀU CAO
+        new_w, new_h = w, int(round(w / target))
+    px = img.load()
+    corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+    avg = tuple(sum(c[i] for c in corners) // 4 for i in range(3))
+    canvas = Image.new("RGB", (max(new_w, w), max(new_h, h)), avg)
+    canvas.paste(img, ((canvas.width - w) // 2, (canvas.height - h) // 2))
+    canvas.save(path)
+
+
 def to_square(path: Path, size: int = TARGET_SIZE) -> None:
     """Ép ảnh về VUÔNG size×size. Nếu chưa vuông thì đệm viền bằng màu mép ảnh."""
     img = Image.open(path).convert("RGB")
@@ -49,14 +75,26 @@ def to_square(path: Path, size: int = TARGET_SIZE) -> None:
     img.save(path)
 
 
+def _product_list(product) -> List[Path]:
+    """Chuẩn hoá 'product' về danh sách Path (nhận 1 ảnh hoặc nhiều ảnh)."""
+    if product is None:
+        return []
+    if isinstance(product, (str, Path)):
+        return [Path(product)]
+    return [Path(p) for p in product if p]
+
+
 def select_refs(
     p_type: str,
-    product: Path,
+    product,
     person: Optional[Path] = None,
     scene: Optional[Path] = None,
 ) -> List[Path]:
-    """Chọn ảnh tham chiếu upload theo loại ảnh (giống USE_*_TYPES của MD)."""
-    refs: List[Path] = [Path(product)]
+    """Chọn ảnh tham chiếu upload theo loại ảnh (giống USE_*_TYPES của MD).
+
+    `product` có thể là 1 ảnh hoặc DANH SÁCH ảnh (cùng sản phẩm, khác mẫu mã).
+    Ảnh sản phẩm luôn đứng ĐẦU danh sách refs (person/scene sau)."""
+    refs: List[Path] = _product_list(product) or [Path(product)]
     if p_type in USE_PERSON_TYPES and person:
         refs.append(Path(person))
     if p_type in USE_SCENE_TYPES and scene:
@@ -88,12 +126,148 @@ LOGIC = (
 )
 _MODEST = "Modest, fully appropriate commercial advertising photography."
 
+# Các loại ảnh NÊN khoe nhiều màu/biến thể cùng lúc (thay vì 1 màu).
+# product_info = tờ thông tin có cột biến thể → phải thấy đủ các màu/mùi.
+SHOW_ALL_VARIANTS_TYPES = {"thumbnail", "features", "audience", "product_info"}
+
+# Ảnh CHỐT SALE luôn phải có nhãn "FLASH DEAL" nổi bật (yêu cầu cố định của tool).
+FLASH_DEAL_NOTE = (
+    'BẮT BUỘC có nhãn/badge chữ "FLASH DEAL" nổi bật, dễ thấy (ví dụ dải/băng '
+    'khuyến mãi màu tương phản ở góc hoặc phía trên), chữ to rõ. GIỮ NGUYÊN cụm '
+    'từ "FLASH DEAL" bằng TIẾNG ANH viết HOA dù ngôn ngữ chữ trên ảnh là gì. '
+    "Kèm lời kêu gọi chốt sale (CTA) ngắn gọn."
+)
+
+
+def _variant_note(p_type: str, variant_index: int, n_products: int) -> str:
+    """Chỉ thị BIẾN THỂ khi có nhiều ảnh sản phẩm (nhiều màu/mẫu).
+
+    Trước đây prompt bảo 'chọn MỘT biến thể tiêu biểu' → model mặc định lấy ảnh
+    ĐẦU TIÊN → cả bộ chỉ 1 màu. Nay: ảnh khoe hàng thì show NHIỀU màu; ảnh còn
+    lại XOAY vòng qua từng biến thể để cả bộ thể hiện đủ dải màu/mẫu."""
+    if n_products <= 1:
+        return ""
+    if p_type in SHOW_ALL_VARIANTS_TYPES:
+        return (
+            f"NHIỀU BIẾN THỂ: có {n_products} màu/mẫu (Ảnh 1..{n_products}). Ảnh "
+            "này NÊN thể hiện NHIỀU (hoặc tất cả) màu/mẫu cùng lúc, sắp xếp gọn "
+            "gàng để khoe đủ dải sản phẩm; mọi biến thể giữ ĐÚNG chức năng, hình "
+            "dạng và bộ phận, chỉ khác màu/kiểu."
+        )
+    k = ((max(1, variant_index) - 1) % n_products) + 1
+    return (
+        f"NHIỀU BIẾN THỂ: có {n_products} màu/mẫu (Ảnh 1..{n_products}). Ảnh này "
+        f"hãy thể hiện ĐÚNG biến thể ở Ảnh số {k}. KHÔNG mặc định lấy ảnh đầu "
+        f"tiên — bám đúng màu/mẫu của Ảnh số {k} (giữ nguyên chức năng/hình dạng)."
+    )
+
+
+def build_edit_prompt(user_edit: str, has_ref: bool = False) -> str:
+    """Prompt SỬA ẢNH: tạo lại đúng ảnh đính kèm + chỉ áp dụng thay đổi user yêu cầu."""
+    ref = (" Ảnh thứ 2 là ẢNH THAM CHIẾU: dùng làm mẫu cho yêu cầu "
+           "(màu/bố cục/logo/phong cách...)." if has_ref else "")
+    return (
+        "Ảnh 1 (đính kèm) là ảnh SẢN PHẨM CẦN CHỈNH SỬA." + ref +
+        " Hãy TẠO LẠI đúng ảnh đó và CHỈ áp dụng thay đổi sau, GIỮ NGUYÊN mọi "
+        "phần khác (sản phẩm, bố cục, các chữ không liên quan, ánh sáng): "
+        + (user_edit or "").strip() +
+        " Giữ sản phẩm nguyên vẹn (đủ mọi bộ phận, đúng chiều, đúng màu trừ khi "
+        "yêu cầu đổi màu), ảnh VUÔNG tỉ lệ 1:1 (1080x1080), CHỤP THẬT không giống "
+        "AI, đúng logic (không méo, tay đúng 5 ngón, chữ có nghĩa đúng chính tả). "
+        + _MODEST
+    )
+
+
+# Nhãn tỉ lệ khung cho prompt sửa hàng loạt.
+RATIO_LABELS = {"1:1": "vuông 1:1", "16:9": "ngang 16:9", "9:16": "dọc 9:16"}
+
+
+def build_batch_edit_prompt(translate_to: str = "", ratio: str = "",
+                            custom: str = "") -> str:
+    """Ghép prompt SỬA HÀNG LOẠT từ các option user chọn (áp CHUNG cho mọi ảnh).
+
+    translate_to: '', 'vi' hoặc 'en' — dịch chữ trong ảnh.
+    ratio: '', '1:1', '16:9', '9:16' — đổi tỉ lệ khung.
+    custom: prompt tự nhập thêm (tùy chọn).
+    Trả '' nếu không chọn option nào."""
+    tasks: List[str] = []
+    tl = (translate_to or "").lower()
+    if tl.startswith("vi") or tl.startswith("en"):
+        lang = "TIẾNG VIỆT" if tl.startswith("vi") else "TIẾNG ANH"
+        tasks.append(
+            f"CHUYỂN NGỮ toàn bộ chữ HIỂN THỊ/OVERLAY (tiêu đề, caption, badge, "
+            f"nút, CTA...) trên ảnh sang {lang}, dịch THẬT CHUẨN và TỰ NHIÊN như "
+            "người bản xứ, dùng ĐÚNG thuật ngữ ngành hàng của sản phẩm này. Dịch "
+            "THEO NGỮ CẢNH của ảnh quảng cáo (hiểu ý cả cụm để dịch cho khớp, "
+            "KHÔNG dịch word-by-word máy móc, KHÔNG dịch sai nghĩa), và chọn cách "
+            f"diễn đạt mang GIỌNG VĂN MỜI CHÀO / QUẢNG CÁO BÁN HÀNG hấp dẫn, đúng "
+            f"văn phong marketing {lang} (câu chữ ngắn gọn, thu hút, thúc đẩy mua). "
+            "GIỮ ĐÚNG Ý GỐC và thông điệp của từng cụm chữ — chỉ diễn đạt lại cho "
+            "hay và tự nhiên, TUYỆT ĐỐI KHÔNG bịa thêm chữ, KHÔNG thêm câu/ý/khẩu "
+            "hiệu mới, KHÔNG phóng đại thêm công dụng, KHÔNG bỏ bớt ý, KHÔNG đổi "
+            "số liệu. Giữ NGUYÊN vị trí, bố cục, kiểu font, màu và cỡ chữ. ĐẶC "
+            "BIỆT: KHÔNG dịch và KHÔNG chỉnh sửa các CHỮ IN TRÊN BAO BÌ/NHÃN SẢN "
+            "PHẨM (tên thương hiệu, nhãn, thông số in trên chính sản phẩm) — giữ "
+            "NGUYÊN GỐC 100%."
+        )
+    r = (ratio or "").strip()
+    if r in RATIO_LABELS:
+        tasks.append(
+            f"Đổi KHUNG ảnh sang tỉ lệ {r} ({RATIO_LABELS[r]}). Bố trí/mở rộng nền "
+            "cho khớp khung mới một cách tự nhiên, KHÔNG cắt mất sản phẩm hay chữ "
+            "quan trọng, KHÔNG bóp méo, KHÔNG kéo giãn sai tỉ lệ."
+        )
+    if custom and custom.strip():
+        tasks.append(custom.strip())
+    if not tasks:
+        return ""
+    lines = [
+        "Ảnh 1 (đính kèm) là ảnh CẦN CHỈNH SỬA. Hãy TẠO LẠI đúng ảnh đó và CHỈ áp "
+        "dụng các yêu cầu sau, GIỮ NGUYÊN mọi phần khác (sản phẩm, bố cục, ánh sáng, "
+        "và mọi chữ KHÔNG được nhắc tới):",
+    ]
+    for i, t in enumerate(tasks, 1):
+        lines.append(f"{i}. {t}")
+    lines.append(
+        "Giữ sản phẩm nguyên vẹn (đủ mọi bộ phận, đúng chiều, đúng màu). Ảnh CHỤP "
+        "THẬT không giống AI, đúng logic (không méo, tay đúng 5 ngón, chữ có nghĩa "
+        "đúng chính tả). " + _MODEST
+    )
+    return "\n".join(lines)
+
+
+def _lang_note(language: str) -> str:
+    """Chỉ thị NGÔN NGỮ cho chữ hiển thị trên ảnh (áp lúc TẠO ảnh).
+
+    Prompt do ChatGPT sinh viết bằng tiếng Việt (để user dễ sửa) nên nếu không
+    ép ở bước tạo ảnh, model hay in luôn chữ tiếng Việt lên ảnh. Đây là lý do
+    'chọn English mà ảnh vẫn ra tiếng Việt'."""
+    if (language or "").lower().startswith("en"):
+        return (
+            "NGÔN NGỮ CHỮ TRÊN ẢNH: TẤT CẢ chữ hiển thị trên ảnh (tiêu đề, nhãn, "
+            "badge, nút, mọi caption) PHẢI bằng TIẾNG ANH. Nếu prompt mô tả chữ "
+            "bằng tiếng Việt thì DỊCH sang tiếng Anh tự nhiên, ĐÚNG chính tả; "
+            "TUYỆT ĐỐI KHÔNG để lại bất kỳ chữ tiếng Việt nào trên ảnh."
+        )
+    return (
+        "NGÔN NGỮ CHỮ TRÊN ẢNH: tất cả chữ hiển thị trên ảnh bằng TIẾNG VIỆT, "
+        "đúng chính tả, có dấu đầy đủ."
+    )
+
 
 def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
                         has_scene: bool, notable_details=None,
-                        theme: str = "", shop: str = "", logo_img: bool = False) -> str:
+                        theme: str = "", shop: str = "", logo_img: bool = False,
+                        language: str = "en", n_products: int = 1,
+                        p_type: str = "", variant_index: int = 1) -> str:
     """Ghép prompt cuối: nội dung + giữ nguyên sản phẩm/người + CHÂN THỰC + an toàn."""
     notes = []
+    notes.append(_lang_note(language))
+    if p_type == "closing":
+        notes.append(FLASH_DEAL_NOTE)
+    vnote = _variant_note(p_type, variant_index, n_products)
+    if vnote:
+        notes.append(vnote)
     if theme:
         notes.append(f"Đồng bộ theme thiết kế chung cả bộ: {theme}.")
     if logo_img:
@@ -104,6 +278,7 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
         )
     elif shop:
         notes.append(f"Thêm logo shop '{shop}' ở góc, nhất quán.")
+    n_products = max(1, int(n_products or 1))
     if len(refs) == 1:
         notes.append(
             "Ảnh đính kèm là SẢN PHẨM: giữ NGUYÊN thiết kế, nhãn, chữ, màu sắc, "
@@ -112,11 +287,24 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
             "xén, không bỏ sót chi tiết."
         )
     else:
-        parts = [
-            "Ảnh 1 là SẢN PHẨM (giữ NGUYÊN thiết kế, nhãn, chữ, màu sắc; hiển thị "
-            "ĐẦY ĐỦ mọi bộ phận gồm dây điện, nút, đầu phụ kiện — không bỏ sót)."
-        ]
-        i = 2
+        if n_products == 1:
+            parts = [
+                "Ảnh 1 là SẢN PHẨM (giữ NGUYÊN thiết kế, nhãn, chữ, màu sắc; hiển "
+                "thị ĐẦY ĐỦ mọi bộ phận gồm dây điện, nút, đầu phụ kiện — không bỏ sót)."
+            ]
+            i = 2
+        else:
+            # Nhiều ảnh sản phẩm = CÙNG 1 sản phẩm, khác mẫu mã/màu sắc nhưng
+            # chức năng y hệt. Cho model hiểu để không ghép nhầm thành nhiều món,
+            # NHƯNG được phép dùng các màu/biến thể khác nhau (không khoá 1 màu).
+            parts = [
+                f"Ảnh 1 đến Ảnh {n_products} là CÙNG MỘT sản phẩm nhưng khác "
+                "MÀU SẮC/MẪU MÃ/phiên bản (chức năng, hình dạng, bộ phận GIỐNG "
+                "hệt nhau). Đây KHÔNG phải nhiều sản phẩm khác nhau. Giữ NGUYÊN "
+                "thiết kế, nhãn, chữ, tỉ lệ và ĐẦY ĐỦ mọi bộ phận (dây điện, nút, "
+                "đầu phụ kiện...) đúng như các ảnh mẫu."
+            ]
+            i = n_products + 1
         if has_person:
             parts.append(
                 f"Ảnh {i} là NGƯỜI MẪU: BẮT BUỘC đưa CHÍNH người mẫu này vào ảnh "
@@ -179,7 +367,7 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
 async def generate_one(
     session: AioSession,
     prompt_obj: dict,
-    product: Path,
+    product,
     person: Optional[Path] = None,
     scene: Optional[Path] = None,
     dest: Optional[Path] = None,
@@ -189,15 +377,22 @@ async def generate_one(
     theme: str = "",
     shop: str = "",
     logo: Optional[Path] = None,
+    language: str = "en",
+    variant_index: int = 1,
 ) -> dict:
-    """Tạo 1 ảnh, tải về dest. Trả result {type,label,prompt,image,status,error}."""
+    """Tạo 1 ảnh, tải về dest. Trả result {type,label,prompt,image,status,error}.
+
+    `product` nhận 1 ảnh hoặc DANH SÁCH ảnh (cùng sản phẩm, khác mẫu mã/màu).
+    `variant_index`: số thứ tự ảnh trong bộ → xoay vòng chọn biến thể màu."""
     p_type = prompt_obj["type"]
     refs = select_refs(p_type, product, person, scene)
+    n_products = len(_product_list(product)) or 1
     has_person = person is not None and p_type in USE_PERSON_TYPES
     has_scene = scene is not None and p_type in USE_SCENE_TYPES
     final_prompt = _build_final_prompt(
         prompt_obj["prompt"], refs, has_person, has_scene, notable_details,
-        theme, shop, logo_img=bool(logo),
+        theme, shop, logo_img=bool(logo), language=language, n_products=n_products,
+        p_type=p_type, variant_index=variant_index,
     )
 
     last_err = ""
@@ -207,11 +402,17 @@ async def generate_one(
             await session.new_chat()
             await session.upload_images(refs)
             await session.type_prompt(final_prompt)
-            await session.send()
-            await session.page.wait_for_timeout(2000)
+            if not await session.send():
+                last_err = "send failed"   # gửi hụt → thử lại lượt mới, không chờ mòn
+                continue
+            # wait_for_image tự chờ 'bắt đầu sinh' (nút Dừng) nên chỉ cần nghỉ
+            # ngắn cho DOM ổn định; 600→300 tiết kiệm ~0.3s/ảnh (an toàn).
+            await session.page.wait_for_timeout(300)
             src = await session.wait_for_image(timeout_ms=timeout_ms)
             if not src:
                 last_err = "no image"
+                if session.hit_limit():
+                    break        # hết lượt → retry cũng vô ích, trả lỗi ngay
                 continue
             out = Path(dest)
             await session.download_image(src, out)

@@ -1,0 +1,175 @@
+================================================================
+        TNT LISTING IMAGE - HƯỚNG DẪN SỬ DỤNG
+        Tạo bộ ảnh listing + bài viết SEO cho TikTok Shop
+================================================================
+
+App tự động tạo bộ 9-10 ảnh listing sản phẩm và bài viết SEO bằng
+cách điều khiển ChatGPT (bản web). Bạn chỉ cần chọn ảnh sản phẩm và
+bấm vài nút.
+
+
+----------------------------------------------------------------
+A. MỞ APP
+----------------------------------------------------------------
+- Chạy file:  TNT_Listing\TNT_Listing.exe
+- QUAN TRỌNG: phải giữ NGUYÊN cả thư mục "TNT_Listing" (gồm file
+  TNT_Listing.exe và thư mục _internal). KHÔNG tách riêng file exe
+  ra chỗ khác, app sẽ không chạy.
+
+
+----------------------------------------------------------------
+B. LẦN ĐẦU DÙNG: ĐĂNG NHẬP TÀI KHOẢN CHATGPT
+----------------------------------------------------------------
+App dùng chính tài khoản ChatGPT của bạn để tạo ảnh (không tốn phí
+API). Nên đăng nhập SẴN vài tài khoản để khi 1 tài khoản hết lượt
+miễn phí, app tự chuyển sang tài khoản khác.
+
+1. Góc trên-trái, mục "Tài khoản ChatGPT".
+2. Chọn "➕ Tài khoản mới" rồi bấm "Đăng nhập tài khoản này".
+3. Một cửa sổ Chrome hiện ra giữa màn hình → đăng nhập ChatGPT như
+   bình thường. Đăng nhập xong app tự lưu (giữ cả khi tắt app).
+4. Muốn thêm tài khoản nữa: lặp lại từ bước 2.
+5. Bấm "🔄 Cập nhật tên" để hiện email từng tài khoản cho dễ nhận.
+
+Dấu ✓ = đã đăng nhập, ○ = chưa. Tài khoản lưu ở ổ C (đường dẫn hiện
+ngay dưới nút), nên cập nhật/cài lại app KHÔNG mất tài khoản.
+
+
+----------------------------------------------------------------
+C. CÁC BƯỚC TẠO ẢNH (LÀM THEO THỨ TỰ)
+----------------------------------------------------------------
+
+BƯỚC 1 — CHỌN ẢNH
+- "Ảnh sản phẩm" (bắt buộc): kéo-thả hoặc bấm Chọn ảnh. CÓ THỂ chọn
+  NHIỀU ảnh nếu sản phẩm có nhiều màu/mẫu mã (app hiểu là CÙNG một
+  sản phẩm khác màu). Bấm ✕ trên từng ảnh để bỏ ảnh chọn nhầm.
+- "Ảnh người mẫu" / "Ảnh bối cảnh" (tùy chọn): nếu có, app sẽ đưa
+  người mẫu / bối cảnh đó vào các ảnh phù hợp.
+- "Logo shop" (tùy chọn): dán logo THẬT vào góc ảnh (không để AI vẽ).
+
+BƯỚC 2 — CẤU HÌNH
+- "Mô tả sản phẩm": nhập thêm thông tin thật (khối lượng, thành phần,
+  kích thước...). App CHỈ dùng thông tin thật, không bịa số liệu.
+- "Số ảnh": số loại ảnh muốn tạo (mặc định tạo hết).
+- "Ngôn ngữ chữ trên ảnh": en (tiếng Anh - cho thị trường Philippines)
+  hoặc vi (tiếng Việt).
+- "Số luồng (song song)": số ảnh tạo cùng lúc. Mặc định 3 là cân bằng.
+  Tăng lên = nhanh hơn nhưng dễ bị ChatGPT chặn/hết lượt hơn.
+- "Chạy ngầm": TÍCH sẵn - cửa sổ Chrome chạy ẩn để bạn làm việc khác.
+  * Windows: cửa sổ nằm ngoài màn hình.
+  * macOS: cửa sổ THU NHỎ xuống Dock - ĐỪNG bấm mở lại khi đang chạy.
+- "Nguồn prompt":
+  * "ChatGPT tự tạo (rồi vào sửa)": app tự viết prompt, bạn sửa lại.
+  * "Tôi tự viết prompt": bạn tự nhập prompt cho từng ảnh.
+
+BƯỚC 3 — "① Tạo prompt"
+- Bấm nút "① Tạo prompt". App phân tích ảnh và viết prompt tiếng Việt
+  cho từng loại ảnh.
+- Khi xong sẽ hiện THÔNG BÁO và tự mở tab "Prompt (sửa)".
+- Xem lại, chỉnh sửa nội dung prompt từng ảnh nếu muốn.
+
+BƯỚC 4 — "② TẠO ẢNH + BÀI VIẾT SEO"
+- Bấm "② TẠO ẢNH + BÀI VIẾT SEO" để tạo cả ảnh và bài SEO 1 lần.
+  (Hoặc "② Chỉ tạo ảnh" nếu chưa cần SEO.)
+- App tạo ảnh song song, tự xoay tài khoản khi hết lượt.
+- Xem tiến độ ở tab "Tiến độ". Khi xong sẽ hiện THÔNG BÁO số ảnh đã
+  tạo và tự mở tab "Ảnh kết quả".
+
+BƯỚC 5 — TẢI ẢNH & COPY SEO
+- Tab "Ảnh kết quả": bấm "⬇ Tải tất cả ảnh về máy" (hoặc "⬇ Tải ảnh
+  về" trên từng ảnh) rồi chọn thư mục lưu.
+- Tab "SEO / Bài viết": bấm "Copy SEO" để dán vào listing trên sàn.
+
+
+----------------------------------------------------------------
+D. SỬA ẢNH (chỉnh lại ảnh chưa ưng)
+----------------------------------------------------------------
+- Ở tab "Ảnh kết quả", bấm "✎ Sửa ảnh này" dưới ảnh cần chỉnh.
+- Nhập yêu cầu sửa (VD: "đổi nền sang tông xám", "làm chữ tiêu đề to
+  hơn"). Có thể thêm 1 "Ảnh tham chiếu" để app làm theo (màu/bố cục/
+  logo...). Bấm "Gửi sửa".
+- Ảnh mới sẽ thay vào đúng thẻ đó khi sửa xong (kèm THÔNG BÁO).
+
+SỬA NHIỀU ẢNH CÙNG LÚC:
+- Đang sửa 1 ảnh, bạn VẪN mở sửa tiếp các ảnh khác (VD ảnh 3, 4, 7).
+- Các ảnh của tài khoản KHÁC NHAU sẽ sửa SONG SONG (cùng lúc).
+- Các ảnh của CÙNG một tài khoản sẽ tự XẾP HÀNG chờ, sửa lần lượt
+  (thẻ hiện "⏳ Đang chờ..."). Đây là cách an toàn, không lỗi.
+- Khi tất cả ảnh trong đợt sửa xong, app báo GỘP 1 thông báo.
+- Lưu ý: đang sửa ảnh thì tạm KHÔNG chạy được "① Tạo prompt" / "②
+  Tạo ảnh" (để tránh đụng tài khoản). Chờ sửa xong đã.
+
+
+----------------------------------------------------------------
+D2. SỬA ẢNH HÀNG LOẠT (tab "Sửa ảnh hàng loạt")
+----------------------------------------------------------------
+Dùng khi bạn CÓ SẴN nhiều ảnh và muốn sửa cùng một kiểu cho tất cả
+(không cần tạo bộ ảnh mới).
+
+1. Mở tab "Sửa ảnh hàng loạt" (bên phải).
+2. Kéo-thả / chọn NHIỀU ảnh cần sửa vào "Ảnh cần sửa hàng loạt".
+3. Chọn 1 hoặc NHIỀU chức năng (tích ô):
+   - "Dịch chữ trong ảnh sang" → chọn Tiếng Việt hoặc Tiếng Anh. App
+     chỉ dịch chữ thiết kế/overlay, KHÔNG bịa thêm chữ, KHÔNG đổi chữ
+     in trên bao bì/nhãn sản phẩm.
+   - "Đổi tỉ lệ ảnh" → chọn 1:1, 16:9 hoặc 9:16.
+   - "Nhập yêu cầu sửa riêng" → tự gõ prompt (VD: xóa nền cho trắng).
+4. Bấm "▶ Sửa hàng loạt".
+   - Mỗi ảnh được gửi riêng vào ChatGPT với CÙNG một yêu cầu, chạy
+     song song theo "Số luồng" (cột trái), tự xoay tài khoản khi hết
+     lượt — giống lúc tạo ảnh.
+5. Xong sẽ hiện THÔNG BÁO; kết quả nằm ở tab "Ảnh kết quả" — vẫn
+   xem/sửa tiếp/tải về như thường.
+
+Lưu ý: chỉnh "Số luồng" và "Chạy ngầm" ở cột trái áp dụng chung cho
+cả sửa hàng loạt.
+
+
+----------------------------------------------------------------
+D3. THÔNG BÁO NGOÀI APP (khi thu nhỏ tool)
+----------------------------------------------------------------
+Khi xong một bước cần thao tác tiếp (tạo prompt xong, tạo ảnh xong,
+tạo SEO xong, sửa ảnh xong, sửa hàng loạt xong...), app sẽ bật THÔNG
+BÁO Ở GÓC MÀN HÌNH — kể cả khi bạn đã thu nhỏ tool để làm việc khác.
+Cả khi LỖI hoặc khi bấm Dừng cũng có thông báo.
+
+- Windows: thông báo hiện ở góc phải-dưới; icon app dưới khay đồng hồ
+  nháy. Bấm vào thông báo (hoặc icon khay) để mở lại tool.
+  Không thấy? Vào Settings > Notifications bật lên, tắt "Focus assist".
+
+- macOS: thông báo hiện ở góc phải-trên (Notification Center); icon
+  app dưới Dock nảy để gây chú ý.
+  Không thấy? Vào System Settings > Notifications, bật thông báo, tắt
+  "Do Not Disturb / Focus". Lần đầu macOS có thể hỏi cho phép — chọn
+  "Allow".
+
+
+----------------------------------------------------------------
+E. NHỮNG ĐIỂM TỰ ĐỘNG CÓ SẴN
+----------------------------------------------------------------
+- Ảnh "Chốt sale" LUÔN có nhãn "FLASH DEAL" nổi bật để nhấn khuyến mãi.
+- Nhiều màu/mẫu: ảnh bìa/tính năng/đối tượng khoe nhiều màu; các ảnh
+  còn lại xoay vòng qua từng màu để cả bộ đủ dải sản phẩm.
+- Chọn ngôn ngữ "en" thì mọi chữ trên ảnh ra tiếng Anh.
+- Hết lượt tài khoản này → tự chuyển tài khoản đã đăng nhập khác; hết
+  sạch mới dừng (báo còn bao nhiêu ảnh chưa tạo).
+
+
+----------------------------------------------------------------
+F. XỬ LÝ SỰ CỐ THƯỜNG GẶP
+----------------------------------------------------------------
+- "Chưa đăng nhập ChatGPT": vào mục Tài khoản, đăng nhập lại.
+- Chạy mãi không ra ảnh / treo: xem tab "Tiến độ" để biết kẹt ở đâu;
+  thử bấm "⛔ Dừng" rồi chạy lại. Có thể do mạng chậm hoặc ChatGPT
+  đang lỗi.
+- Bị hết lượt liên tục: đăng nhập thêm tài khoản ChatGPT khác.
+- Sửa ảnh báo "File ảnh gốc không còn": ảnh đã bị xóa/di chuyển trên
+  máy - tạo lại ảnh rồi sửa.
+- macOS: khi "Chạy ngầm", đừng bấm mở lại cửa sổ Chrome bị thu nhỏ
+  trong lúc app đang làm việc.
+
+----------------------------------------------------------------
+Mẹo: Muốn nhanh & mượt nhất - đăng nhập sẵn 2-3 tài khoản ChatGPT,
+để "Số luồng" = 3, và luôn bấm "① Tạo prompt" trước rồi mới "② Tạo
+ảnh + SEO".
+================================================================
