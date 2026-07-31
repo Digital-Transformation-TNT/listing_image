@@ -5,10 +5,12 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QLabel, QPushButton, QLineEdit, QPlainTextEdit,
     QSpinBox, QComboBox, QCheckBox, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -31,6 +33,34 @@ from ui_listing.workers import (
 
 NEW_ACC = "➕ Tài khoản mới"
 IS_MAC = sys.platform == "darwin"
+IS_WIN = sys.platform.startswith("win")
+
+
+def _app_icon() -> QIcon:
+    """Icon thương hiệu cho cửa sổ + icon khay/menu bar (nếu có file logo).
+
+    Tìm trong thư mục tài nguyên của bản đóng gói (sys._MEIPASS) trước, rồi tới
+    thư mục app. Chưa có file logo thì trả về icon rỗng — chỗ gọi sẽ dùng icon
+    mặc định của hệ thống."""
+    roots = []
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        roots.append(Path(meipass))
+    roots.append(BASE_DIR)
+    roots.append(Path(__file__).resolve().parent.parent)
+    names = ("logo.icns", "logo.png", "logo.ico") if IS_MAC else \
+            ("logo.ico", "logo.png", "logo.icns")
+    for root in roots:
+        for name in names:
+            try:
+                p = root / name
+                if p.is_file():
+                    ic = QIcon(str(p))
+                    if not ic.isNull():
+                        return ic
+            except Exception:
+                pass
+    return QIcon()
 
 
 def _card(title: str = "") -> QFrame:
@@ -40,6 +70,9 @@ def _card(title: str = "") -> QFrame:
 
 
 class MainWindow(QMainWindow):
+    # thread phụ (osascript trên Mac) báo về GUI thread khi cần toast dự phòng
+    notify_fallback = Signal(str, str, bool)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TNT Listing Image — TikTok Shop")
@@ -119,7 +152,15 @@ class MainWindow(QMainWindow):
         báo bật lên ở góc màn hình (không cần mở lại app mới thấy)."""
         self.tray = None
         try:
+            # tín hiệu để thread phụ (osascript trên Mac) nhờ GUI thread bắn
+            # toast dự phòng — KHÔNG được đụng vào widget từ thread khác.
+            self.notify_fallback.connect(self._show_tray_toast)
+        except Exception:
+            pass
+        try:
             icon = self.windowIcon()
+            if icon.isNull():
+                icon = _app_icon()
             if icon.isNull():
                 icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
             self.setWindowIcon(icon)
@@ -151,7 +192,8 @@ class MainWindow(QMainWindow):
         - Windows/Linux: dùng toast của khay hệ thống (QSystemTrayIcon).
         - macOS: dùng thông báo NATIVE qua osascript. Bản .app ký ad-hoc (chưa
           notarize) thường KHÔNG hiện được toast của Qt trên macOS, nên đi đường
-          native cho chắc ăn.
+          native cho chắc ăn. osascript chạy ở thread phụ (không làm khựng giao
+          diện); nếu nó LỖI thì quay về dùng toast của Qt cho đỡ mất thông báo.
         Kèm nháy icon taskbar (Windows) / nảy Dock (macOS)."""
         if self.tray is not None:
             try:
@@ -159,33 +201,60 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         if IS_MAC:
-            self._notify_mac_native(title, text)
-        else:
-            icon = (QSystemTrayIcon.Information if success
-                    else QSystemTrayIcon.Warning)
             try:
-                if self.tray is not None:
-                    self.tray.showMessage(title, text, icon, 10000)
+                threading.Thread(target=self._mac_notify_bg,
+                                 args=(title, text, success),
+                                 daemon=True).start()
             except Exception:
-                pass
+                self._show_tray_toast(title, text, success)
+        else:
+            self._show_tray_toast(title, text, success)
         try:
             QApplication.alert(self, 3000)   # nháy taskbar (Win) / nảy Dock (Mac)
         except Exception:
             pass
 
+    def _show_tray_toast(self, title: str, text: str, success: bool = True):
+        """Toast của khay hệ thống (Qt). CHỈ gọi từ GUI thread."""
+        icon = (QSystemTrayIcon.Information if success
+                else QSystemTrayIcon.Warning)
+        try:
+            if self.tray is not None:
+                self.tray.showMessage(title, text, icon, 10000)
+        except Exception:
+            pass
+
+    def _mac_notify_bg(self, title: str, text: str, success: bool):
+        """Chạy ở THREAD PHỤ: bắn thông báo native macOS, lỗi thì báo về GUI.
+
+        Lưu ý: osascript trả về 0 kể cả khi người dùng đã TẮT thông báo trong
+        System Settings (macOS nuốt im lặng) — nhánh dự phòng chỉ cứu được các
+        lỗi cứng: thiếu/không chạy được osascript, bị sandbox chặn..."""
+        if not self._notify_mac_native(title, text):
+            try:
+                self.notify_fallback.emit(title, text, success)
+            except Exception:
+                pass
+
     @staticmethod
-    def _notify_mac_native(title: str, text: str):
-        """Thông báo native macOS qua osascript (không phụ thuộc Qt)."""
+    def _notify_mac_native(title: str, text: str) -> bool:
+        """Thông báo native macOS qua osascript (không phụ thuộc Qt).
+
+        Trả về True nếu osascript chạy trót lọt."""
         def _esc(s: str) -> str:
             # bỏ ký tự phá cú pháp AppleScript
             return (s or "").replace("\\", "").replace('"', "'").replace("\n", " ")
+        # đường dẫn tuyệt đối: app mở từ Finder có PATH tối giản, đừng phụ thuộc PATH
+        exe = "/usr/bin/osascript" if os.path.exists("/usr/bin/osascript") else "osascript"
         try:
             script = (f'display notification "{_esc(text)}" '
                       f'with title "{_esc(title)}"')
-            subprocess.Popen(["osascript", "-e", script],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            p = subprocess.run([exe, "-e", script],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=10)
+            return p.returncode == 0
         except Exception:
-            pass
+            return False
 
     # ------------------------------------------------------------------ #
     def _build_left(self) -> QWidget:
@@ -1457,10 +1526,23 @@ class MainWindow(QMainWindow):
         self._logline(">> Đã copy SEO vào clipboard.")
 
     def _open_dir(self):
-        if self.session_dir and os.path.isdir(self.session_dir):
-            os.startfile(self.session_dir)  # Windows
-        else:
+        """Mở thư mục kết quả bằng trình quản lý file của HỆ ĐIỀU HÀNH.
+
+        os.startfile CHỈ có trên Windows — Mac/Linux phải dùng open/xdg-open."""
+        if not (self.session_dir and os.path.isdir(self.session_dir)):
             QMessageBox.information(self, "Chưa có", "Chưa có thư mục kết quả.")
+            return
+        d = str(self.session_dir)
+        try:
+            if IS_WIN:
+                os.startfile(d)                       # type: ignore[attr-defined]
+            elif IS_MAC:
+                subprocess.Popen(["/usr/bin/open", d])
+            else:
+                subprocess.Popen(["xdg-open", d])
+        except Exception as ex:
+            QMessageBox.warning(self, "Không mở được",
+                                f"Không mở được thư mục:\n{d}\n\n{ex}")
 
     def closeEvent(self, e):
         # tránh treo khi đóng lúc worker đang chạy

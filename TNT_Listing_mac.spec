@@ -20,10 +20,17 @@ ad-hoc codesign; người dùng cuối chỉ cần làm 1 lần:
     xattr -dr com.apple.quarantine TNT_Listing.app
 hoặc chuột phải -> Open. Muốn double-click mượt hẳn cần Apple Developer ($99) để notarize.
 """
+import os
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = []
 binaries = []
+
+# Logo (nếu có) — icon .app + icon menu bar khi bắn thông báo.
+for _logo in ("logo.icns", "logo.png"):
+    if os.path.exists(_logo):
+        datas.append((_logo, "."))
 hiddenimports = ["core", "ui_listing", "tnt_license", "cryptography"]
 
 # Playwright cần kèm driver (node); cryptography có phần Rust (_rust)+cffi -> collect_all
@@ -64,7 +71,7 @@ exe = EXE(
     upx=False,
     console=False,          # app cửa sổ, không console
     disable_windowed_traceback=False,
-    icon="logo.icns" if __import__("os").path.exists("logo.icns") else None,
+    icon="logo.icns" if os.path.exists("logo.icns") else None,
 )
 coll = COLLECT(
     exe,
@@ -78,7 +85,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="TNT_Listing.app",
-    icon="logo.icns" if __import__("os").path.exists("logo.icns") else None,
+    icon="logo.icns" if os.path.exists("logo.icns") else None,
     bundle_identifier="com.tntgroup.listingimage",
     info_plist={
         "CFBundleName": "TNT Listing Image",

@@ -1,9 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec cho TNT Listing Image (PySide6 + Playwright)."""
+import os
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas = []
 binaries = []
+
+# Logo (nếu có) — dùng cho icon .exe + icon khay hệ thống khi bắn thông báo.
+for _logo in ("logo.ico", "logo.png"):
+    if os.path.exists(_logo):
+        datas.append((_logo, "."))
 hiddenimports = ["core", "ui_listing", "tnt_license", "cryptography"]
 
 # Playwright cần kèm driver (node) — collect_all lấy hết data package.
@@ -43,6 +50,7 @@ exe = EXE(
     upx=False,
     console=False,          # app cửa sổ, không console
     disable_windowed_traceback=False,
+    icon="logo.ico" if os.path.exists("logo.ico") else None,
 )
 coll = COLLECT(
     exe,
