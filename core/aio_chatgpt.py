@@ -150,7 +150,9 @@ class AioSession:
         deadline = time.time() + timeout_ms / 1000
         while time.time() < deadline:
             if await self._count_thumbnails() >= target:
-                await self.page.wait_for_timeout(500)
+                # Thumbnail đã hiện; upload-lên-server xong hay chưa thì send()
+                # vẫn CHỜ nút gửi sẵn sàng nên chỉ cần nghỉ ngắn cho DOM ổn định.
+                await self.page.wait_for_timeout(250)
                 return await self._count_thumbnails()
             await self.page.wait_for_timeout(300)
         return await self._count_thumbnails()
@@ -380,7 +382,7 @@ class AioSession:
         except Exception:
             return []
 
-    async def wait_for_image(self, timeout_ms: int = 180000, poll_ms: int = 1000,
+    async def wait_for_image(self, timeout_ms: int = 180000, poll_ms: int = 600,
                              baseline: Optional[set] = None) -> Optional[str]:
         base = set(baseline or ())
         deadline = time.time() + timeout_ms / 1000
@@ -473,7 +475,7 @@ class AioSession:
         await self.type_prompt(prompt)
         if not await self.send():
             return None
-        await self.page.wait_for_timeout(800)
+        await self.page.wait_for_timeout(400)
         return await self.wait_for_image(timeout_ms=timeout_ms, baseline=baseline)
 
     def conversation_url(self) -> str:

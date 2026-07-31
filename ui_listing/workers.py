@@ -14,7 +14,7 @@ from PySide6.QtCore import QThread, Signal
 
 from core.pipeline import (
     make_prompts_pipeline, make_seo_pipeline, generate_from_prompts,
-    edit_image, do_login, refresh_account_names,
+    edit_image, batch_edit_images, do_login, refresh_account_names,
 )
 from core.aio_chatgpt import StopRequested
 from config import profile_path
@@ -89,6 +89,47 @@ class GenerateWorker(_CancellableWorker):
     """② Tạo ảnh từ prompt CHO SẴN — tự xoay tài khoản; hủy được."""
     def run(self):
         self._run_fn(generate_from_prompts)
+
+
+class BatchEditWorker(QThread):
+    """Sửa HÀNG LOẠT nhiều ảnh (mỗi ảnh 1 chat, cùng 1 prompt), song song +
+    xoay tài khoản. Hủy được như GenerateWorker."""
+    progress = Signal(str, dict)
+    done = Signal(dict)
+    failed = Signal(str)
+    stopped = Signal()
+
+    def __init__(self, images, prompt, ratio, profiles, concurrency, hidden,
+                 parent=None):
+        super().__init__(parent)
+        self.images = images
+        self.prompt = prompt
+        self.ratio = ratio
+        self.profiles = profiles
+        self.concurrency = concurrency
+        self.hidden = hidden
+        self.cancel_event = threading.Event()
+
+    def request_stop(self):
+        self.cancel_event.set()
+
+    def run(self):
+        try:
+            def cb(event: str, data: dict):
+                self.progress.emit(event, dict(data or {}))
+            out = asyncio.run(batch_edit_images(
+                self.images, self.prompt, ratio=self.ratio,
+                profiles=self.profiles, concurrency=self.concurrency,
+                hidden=self.hidden, cancel=self.cancel_event, progress=cb,
+            ))
+            self.done.emit(out)
+        except StopRequested:
+            self.stopped.emit()
+        except Exception as e:
+            if self.cancel_event.is_set():
+                self.stopped.emit()
+            else:
+                self.failed.emit(repr(e))
 
 
 class EditWorker(QThread):

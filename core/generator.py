@@ -32,6 +32,32 @@ def overlay_logo(image_path: Path, logo_path: Path,
         pass
 
 
+def to_ratio(path: Path, rw: int, rh: int) -> None:
+    """Ép ảnh về đúng tỉ lệ rw:rh bằng cách ĐỆM viền (không cắt mất nội dung).
+
+    Chỉ đệm thêm cho đủ khung nên nếu ChatGPT đã trả gần đúng tỉ lệ thì phần
+    đệm rất nhỏ. Màu đệm lấy trung bình 4 góc để hòa với nền."""
+    img = Image.open(path).convert("RGB")
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return
+    target = rw / rh
+    cur = w / h
+    if abs(cur - target) < 0.01:
+        img.save(path)
+        return
+    if cur < target:                 # quá cao/hẹp → nới CHIỀU RỘNG
+        new_w, new_h = int(round(h * target)), h
+    else:                            # quá rộng → nới CHIỀU CAO
+        new_w, new_h = w, int(round(w / target))
+    px = img.load()
+    corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+    avg = tuple(sum(c[i] for c in corners) // 4 for i in range(3))
+    canvas = Image.new("RGB", (max(new_w, w), max(new_h, h)), avg)
+    canvas.paste(img, ((canvas.width - w) // 2, (canvas.height - h) // 2))
+    canvas.save(path)
+
+
 def to_square(path: Path, size: int = TARGET_SIZE) -> None:
     """Ép ảnh về VUÔNG size×size. Nếu chưa vuông thì đệm viền bằng màu mép ảnh."""
     img = Image.open(path).convert("RGB")
@@ -104,6 +130,14 @@ _MODEST = "Modest, fully appropriate commercial advertising photography."
 # product_info = tờ thông tin có cột biến thể → phải thấy đủ các màu/mùi.
 SHOW_ALL_VARIANTS_TYPES = {"thumbnail", "features", "audience", "product_info"}
 
+# Ảnh CHỐT SALE luôn phải có nhãn "FLASH DEAL" nổi bật (yêu cầu cố định của tool).
+FLASH_DEAL_NOTE = (
+    'BẮT BUỘC có nhãn/badge chữ "FLASH DEAL" nổi bật, dễ thấy (ví dụ dải/băng '
+    'khuyến mãi màu tương phản ở góc hoặc phía trên), chữ to rõ. GIỮ NGUYÊN cụm '
+    'từ "FLASH DEAL" bằng TIẾNG ANH viết HOA dù ngôn ngữ chữ trên ảnh là gì. '
+    "Kèm lời kêu gọi chốt sale (CTA) ngắn gọn."
+)
+
 
 def _variant_note(p_type: str, variant_index: int, n_products: int) -> str:
     """Chỉ thị BIẾN THỂ khi có nhiều ảnh sản phẩm (nhiều màu/mẫu).
@@ -144,6 +178,64 @@ def build_edit_prompt(user_edit: str, has_ref: bool = False) -> str:
     )
 
 
+# Nhãn tỉ lệ khung cho prompt sửa hàng loạt.
+RATIO_LABELS = {"1:1": "vuông 1:1", "16:9": "ngang 16:9", "9:16": "dọc 9:16"}
+
+
+def build_batch_edit_prompt(translate_to: str = "", ratio: str = "",
+                            custom: str = "") -> str:
+    """Ghép prompt SỬA HÀNG LOẠT từ các option user chọn (áp CHUNG cho mọi ảnh).
+
+    translate_to: '', 'vi' hoặc 'en' — dịch chữ trong ảnh.
+    ratio: '', '1:1', '16:9', '9:16' — đổi tỉ lệ khung.
+    custom: prompt tự nhập thêm (tùy chọn).
+    Trả '' nếu không chọn option nào."""
+    tasks: List[str] = []
+    tl = (translate_to or "").lower()
+    if tl.startswith("vi") or tl.startswith("en"):
+        lang = "TIẾNG VIỆT" if tl.startswith("vi") else "TIẾNG ANH"
+        tasks.append(
+            f"CHUYỂN NGỮ toàn bộ chữ HIỂN THỊ/OVERLAY (tiêu đề, caption, badge, "
+            f"nút, CTA...) trên ảnh sang {lang}, dịch THẬT CHUẨN và TỰ NHIÊN như "
+            "người bản xứ, dùng ĐÚNG thuật ngữ ngành hàng của sản phẩm này. Dịch "
+            "THEO NGỮ CẢNH của ảnh quảng cáo (hiểu ý cả cụm để dịch cho khớp, "
+            "KHÔNG dịch word-by-word máy móc, KHÔNG dịch sai nghĩa), và chọn cách "
+            f"diễn đạt mang GIỌNG VĂN MỜI CHÀO / QUẢNG CÁO BÁN HÀNG hấp dẫn, đúng "
+            f"văn phong marketing {lang} (câu chữ ngắn gọn, thu hút, thúc đẩy mua). "
+            "GIỮ ĐÚNG Ý GỐC và thông điệp của từng cụm chữ — chỉ diễn đạt lại cho "
+            "hay và tự nhiên, TUYỆT ĐỐI KHÔNG bịa thêm chữ, KHÔNG thêm câu/ý/khẩu "
+            "hiệu mới, KHÔNG phóng đại thêm công dụng, KHÔNG bỏ bớt ý, KHÔNG đổi "
+            "số liệu. Giữ NGUYÊN vị trí, bố cục, kiểu font, màu và cỡ chữ. ĐẶC "
+            "BIỆT: KHÔNG dịch và KHÔNG chỉnh sửa các CHỮ IN TRÊN BAO BÌ/NHÃN SẢN "
+            "PHẨM (tên thương hiệu, nhãn, thông số in trên chính sản phẩm) — giữ "
+            "NGUYÊN GỐC 100%."
+        )
+    r = (ratio or "").strip()
+    if r in RATIO_LABELS:
+        tasks.append(
+            f"Đổi KHUNG ảnh sang tỉ lệ {r} ({RATIO_LABELS[r]}). Bố trí/mở rộng nền "
+            "cho khớp khung mới một cách tự nhiên, KHÔNG cắt mất sản phẩm hay chữ "
+            "quan trọng, KHÔNG bóp méo, KHÔNG kéo giãn sai tỉ lệ."
+        )
+    if custom and custom.strip():
+        tasks.append(custom.strip())
+    if not tasks:
+        return ""
+    lines = [
+        "Ảnh 1 (đính kèm) là ảnh CẦN CHỈNH SỬA. Hãy TẠO LẠI đúng ảnh đó và CHỈ áp "
+        "dụng các yêu cầu sau, GIỮ NGUYÊN mọi phần khác (sản phẩm, bố cục, ánh sáng, "
+        "và mọi chữ KHÔNG được nhắc tới):",
+    ]
+    for i, t in enumerate(tasks, 1):
+        lines.append(f"{i}. {t}")
+    lines.append(
+        "Giữ sản phẩm nguyên vẹn (đủ mọi bộ phận, đúng chiều, đúng màu). Ảnh CHỤP "
+        "THẬT không giống AI, đúng logic (không méo, tay đúng 5 ngón, chữ có nghĩa "
+        "đúng chính tả). " + _MODEST
+    )
+    return "\n".join(lines)
+
+
 def _lang_note(language: str) -> str:
     """Chỉ thị NGÔN NGỮ cho chữ hiển thị trên ảnh (áp lúc TẠO ảnh).
 
@@ -171,6 +263,8 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
     """Ghép prompt cuối: nội dung + giữ nguyên sản phẩm/người + CHÂN THỰC + an toàn."""
     notes = []
     notes.append(_lang_note(language))
+    if p_type == "closing":
+        notes.append(FLASH_DEAL_NOTE)
     vnote = _variant_note(p_type, variant_index, n_products)
     if vnote:
         notes.append(vnote)
@@ -311,7 +405,9 @@ async def generate_one(
             if not await session.send():
                 last_err = "send failed"   # gửi hụt → thử lại lượt mới, không chờ mòn
                 continue
-            await session.page.wait_for_timeout(600)
+            # wait_for_image tự chờ 'bắt đầu sinh' (nút Dừng) nên chỉ cần nghỉ
+            # ngắn cho DOM ổn định; 600→300 tiết kiệm ~0.3s/ảnh (an toàn).
+            await session.page.wait_for_timeout(300)
             src = await session.wait_for_image(timeout_ms=timeout_ms)
             if not src:
                 last_err = "no image"

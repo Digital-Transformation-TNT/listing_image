@@ -84,7 +84,7 @@ TYPE_STYLE = {
         "khối lượng/thành phần; trường nào không biết thì BỎ, không ghi 'đang cập nhật'."
     ),
     "audience": "ĐỐI TƯỢNG phù hợp / TÌNH HUỐNG sử dụng thực tế (ai dùng, dùng ở đâu); người và không gian hợp ngữ cảnh; text nêu nhóm đối tượng.",
-    "closing": "Ảnh CHỐT SALE/tạo niềm tin: kết quả 'như ngoài tiệm tại nhà', CTA ngắn (vd 'Order now') + điểm tin cậy; bố cục mạnh, thúc đẩy mua.",
+    "closing": "Ảnh CHỐT SALE/tạo niềm tin: kết quả 'như ngoài tiệm tại nhà', CTA ngắn (vd 'Order now') + điểm tin cậy; bố cục mạnh, thúc đẩy mua. BẮT BUỘC có nhãn/badge chữ 'FLASH DEAL' (giữ nguyên tiếng Anh, IN HOA) nổi bật để nhấn khuyến mãi.",
 }
 
 

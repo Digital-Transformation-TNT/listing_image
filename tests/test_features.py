@@ -88,6 +88,62 @@ fp3 = _build_final_prompt("Ảnh.", [Path("a.png"), Path("b.png"), Path("c.png")
 check("_build_final_prompt nhúng biến thể theo index", "Ảnh số 2" in fp3)
 
 # --------------------------------------------------------------------------- #
+print("== chốt sale LUÔN có 'FLASH DEAL' ==")
+cl_vi = _build_final_prompt("Ảnh chốt sale.", [Path("a.png")], False, False,
+                            p_type="closing", language="vi")
+cl_en = _build_final_prompt("Ảnh chốt sale.", [Path("a.png")], False, False,
+                            p_type="closing", language="en")
+other = _build_final_prompt("Ảnh bìa.", [Path("a.png")], False, False,
+                            p_type="thumbnail", language="vi")
+check("closing (VI) có 'FLASH DEAL'", "FLASH DEAL" in cl_vi)
+check("closing (EN) có 'FLASH DEAL'", "FLASH DEAL" in cl_en)
+check("giữ nguyên tiếng Anh dù ảnh tiếng Việt", "GIỮ NGUYÊN" in cl_vi
+      and "FLASH DEAL" in cl_vi)
+check("loại khác KHÔNG bị thêm FLASH DEAL", "FLASH DEAL" not in other)
+check("TYPE_STYLE closing nhắc FLASH DEAL",
+      "FLASH DEAL" in __import__("core.analyzer", fromlist=["TYPE_STYLE"])
+      .TYPE_STYLE["closing"])
+
+# --------------------------------------------------------------------------- #
+print("== sửa ảnh HÀNG LOẠT: ghép prompt theo option ==")
+from core.generator import build_batch_edit_prompt  # noqa: E402
+
+b_all = build_batch_edit_prompt("vi", "16:9", "xóa nền cho trắng")
+check("dịch VI → nhắc TIẾNG VIỆT", "TIẾNG VIỆT" in b_all)
+check("dịch → cấm bịa thêm chữ", "KHÔNG bịa thêm chữ" in b_all)
+check("dịch → giữ nguyên chữ trên nhãn sản phẩm", "NHÃN SẢN PHẨM" in b_all)
+check("dịch → theo NGỮ CẢNH ảnh", "NGỮ CẢNH" in b_all)
+check("dịch → giọng MỜI CHÀO/quảng cáo", "MỜI CHÀO" in b_all)
+check("dịch → chuẩn/tự nhiên", "CHUẨN" in b_all and "TỰ NHIÊN" in b_all)
+check("dịch → giữ đúng ý gốc", "Ý GỐC" in b_all)
+check("ratio → nêu đúng 16:9", "16:9" in b_all)
+check("custom → chứa yêu cầu tự nhập", "xóa nền cho trắng" in b_all)
+
+b_en = build_batch_edit_prompt("en", "", "")
+check("dịch EN → nhắc TIẾNG ANH", "TIẾNG ANH" in b_en)
+check("chỉ dịch → KHÔNG chèn phần tỉ lệ", "tỉ lệ" not in b_en.lower())
+
+b_ratio = build_batch_edit_prompt("", "9:16", "")
+check("chỉ ratio → có 9:16", "9:16" in b_ratio)
+check("chỉ ratio → KHÔNG nhắc dịch", "DỊCH toàn bộ" not in b_ratio)
+
+check("không chọn gì → prompt rỗng", build_batch_edit_prompt("", "", "") == "")
+
+# to_ratio: đệm đúng tỉ lệ, không cắt nội dung
+from core.generator import to_ratio  # noqa: E402
+from PIL import Image  # noqa: E402
+import tempfile  # noqa: E402
+_d = tempfile.mkdtemp()
+_p = Path(_d) / "r.png"
+Image.new("RGB", (1000, 1000), (10, 20, 30)).save(_p)
+to_ratio(_p, 16, 9)
+_w, _h = Image.open(_p).size
+check("to_ratio ép được 16:9", abs(_w / _h - 16 / 9) < 0.02, f"{_w}x{_h}")
+Image.new("RGB", (1600, 900), (10, 20, 30)).save(_p)
+to_ratio(_p, 16, 9)
+check("to_ratio đã đúng tỉ lệ → giữ nguyên", Image.open(_p).size == (1600, 900))
+
+# --------------------------------------------------------------------------- #
 print("== sửa ảnh: upload ảnh + prompt (+ tham chiếu) ==")
 e0 = build_edit_prompt("đổi nền sang xám", has_ref=False)
 check("edit: nói rõ Ảnh 1 là ảnh CẦN SỬA", "CẦN CHỈNH SỬA" in e0)

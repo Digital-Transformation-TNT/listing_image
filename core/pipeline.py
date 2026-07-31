@@ -18,7 +18,9 @@ from core.aio_chatgpt import AioSession, StopRequested
 from core.analyzer import (
     analyze, make_prompts, make_seo, generate_seo, PROMPT_SHARDS,
 )
-from core.generator import generate_one, to_square, build_edit_prompt
+from core.generator import (
+    generate_one, to_square, to_ratio, build_edit_prompt,
+)
 from core.qc import qc_image
 from core import store
 from config import (
@@ -540,7 +542,7 @@ async def edit_image(
         await s.type_prompt(prompt)
         if not await s.send():
             return None
-        await s.page.wait_for_timeout(800)
+        await s.page.wait_for_timeout(400)
         src = await s.wait_for_image(timeout_ms=240000, baseline=baseline)
         if not src:
             return None
@@ -553,6 +555,211 @@ async def edit_image(
         return str(out)
     finally:
         await br.close()
+
+
+def _apply_batch_ratio(out: Path, ratio: str) -> None:
+    """Ép tỉ lệ khung cho ảnh sửa hàng loạt (an toàn, nuốt lỗi)."""
+    try:
+        if ratio == "1:1":
+            to_square(out)
+        elif ratio == "16:9":
+            to_ratio(out, 16, 9)
+        elif ratio == "9:16":
+            to_ratio(out, 9, 16)
+    except Exception:
+        pass
+
+
+async def _edit_one_batch(sess, image_path, edit_prompt: str, dest: Path,
+                          ratio: str = "") -> dict:
+    """Sửa 1 ảnh: chat mới → upload đúng ảnh đó + prompt → chờ ảnh mới → tải về.
+
+    Trả result dict tương thích ResultCard (image/label/type/status/...)."""
+    img = Path(image_path)
+    label = img.name
+    base = {"type": "batch_edit", "label": label, "prompt": edit_prompt,
+            "conversation_url": "", "error": ""}
+    if not img.is_file():
+        return {**base, "image": None, "status": "error",
+                "error": "không tìm thấy ảnh"}
+    try:
+        await sess.new_chat()
+        await sess.upload_images([img])
+        baseline = set(await sess.generated_srcs())
+        await sess.type_prompt(edit_prompt)
+        if not await sess.send():
+            return {**base, "image": None, "status": "error", "error": "send failed"}
+        await sess.page.wait_for_timeout(400)
+        src = await sess.wait_for_image(timeout_ms=240000, baseline=baseline)
+        if not src:
+            return {**base, "image": None, "status": "error", "error": "no image"}
+        out = Path(dest)
+        await sess.download_image(src, out)
+        _apply_batch_ratio(out, ratio)
+        return {**base, "image": str(out), "status": "success",
+                "conversation_url": sess.conversation_url()}
+    except StopRequested:
+        raise
+    except Exception as e:
+        return {**base, "image": None, "status": "error", "error": repr(e)}
+
+
+async def _batch_edit_account(br, page0, items, edit_prompt, sdir, total,
+                              base_done, ratio, concurrency, cancel, progress,
+                              profile_name=""):
+    """Sửa hàng loạt bằng 1 tài khoản (nhiều tab song song). Dừng khi HẾT LƯỢT
+    hoặc user HỦY. Trả (done, remaining, limit). Raise StopRequested nếu hủy."""
+    conc = max(1, min(concurrency, len(items)))
+    pool: asyncio.Queue = asyncio.Queue()
+    sess0 = AioSession(page0)
+    sess0.cancel = cancel
+    pool.put_nowait(sess0)
+    for _ in range(conc - 1):
+        s = AioSession(await br.new_page())
+        s.cancel = cancel
+        pool.put_nowait(s)
+    q: asyncio.Queue = asyncio.Queue()
+    for it in items:
+        q.put_nowait(it)
+    done = {}
+    limit_event = asyncio.Event()
+    lock = asyncio.Lock()
+    consec = {"n": 0}
+    stopped = {"v": False}
+
+    def _emit_img(idx, res):
+        _emit(progress, "image_done", {
+            "idx": idx, "done": base_done + len(done), "total": total,
+            "type": res.get("type", "batch_edit"), "status": res["status"],
+            "image": res.get("image"),
+        })
+
+    async def worker():
+        while not limit_event.is_set():
+            if cancel is not None and cancel.is_set():
+                stopped["v"] = True
+                limit_event.set()
+                return
+            try:
+                idx, path = q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            sess = await pool.get()
+            try:
+                dest = sdir / f"{idx:02d}_{Path(path).stem}_edit.png"
+                res = await _edit_one_batch(sess, path, edit_prompt, dest, ratio)
+                res["profile"] = profile_name
+                if res["status"] == "success":
+                    async with lock:
+                        consec["n"] = 0
+                        done[idx] = res
+                        _emit_img(idx, res)
+                else:
+                    is_limit = await _session_hit_limit(sess)
+                    async with lock:
+                        consec["n"] += 1
+                        streak = consec["n"]
+                    if is_limit or streak >= _FAIL_STREAK:
+                        q.put_nowait((idx, path))
+                        limit_event.set()
+                        return
+                    async with lock:
+                        done[idx] = res
+                        _emit_img(idx, res)
+            except StopRequested:
+                stopped["v"] = True
+                q.put_nowait((idx, path))
+                limit_event.set()
+                return
+            finally:
+                pool.put_nowait(sess)
+
+    await asyncio.gather(*[worker() for _ in range(conc)])
+    if stopped["v"]:
+        raise StopRequested()
+    remaining = [(idx, p) for (idx, p) in items if idx not in done]
+    return done, remaining, limit_event.is_set()
+
+
+async def batch_edit_images(images, edit_prompt: str, ratio: str = "",
+                            profiles=None, concurrency: int = DEFAULT_CONCURRENCY,
+                            hidden: bool = False, output_base: Path = OUTPUT_DIR,
+                            cancel=None, progress: ProgressCB = None) -> dict:
+    """SỬA HÀNG LOẠT: mỗi ảnh gửi riêng (1 ảnh + CÙNG 1 prompt) vào ChatGPT, chạy
+    SONG SONG theo `concurrency`, TỰ XOAY tài khoản khi hết lượt (giống tạo ảnh).
+
+    Trả dict {dir, results, ok_count, total} — results tương thích gallery cũ."""
+    images = [Path(p) for p in (images or []) if p]
+    if not images:
+        raise RuntimeError("Không có ảnh để sửa.")
+    if not (edit_prompt or "").strip():
+        raise RuntimeError("Chưa có yêu cầu sửa (prompt rỗng).")
+    items = list(enumerate(images, 1))          # (idx, path)
+    n = len(items)
+    profiles = profiles or [(None, "default")]
+
+    sid, sdir = store.new_session_dir(output_base)
+    results_by_idx = {}
+    remaining = list(items)
+    user_stopped = False
+    _emit(progress, "generate_start", {"total": n, "concurrency": concurrency})
+
+    for profile_dir, prof_name in profiles:
+        if not remaining or user_stopped:
+            break
+        if cancel is not None and cancel.is_set():
+            user_stopped = True
+            break
+        _emit(progress, "account", {"profile": prof_name, "remaining": len(remaining)})
+        br = AioBrowser(hidden=hidden,
+                        **({"profile_dir": profile_dir} if profile_dir else {}))
+        try:
+            await br.start()
+            page0 = await br.first_page()
+            await br.open_chatgpt(page0)
+            if not await br.is_logged_in(page0, timeout_ms=15000):
+                _emit(progress, "account_skip",
+                      {"profile": prof_name, "reason": "chưa đăng nhập"})
+                continue
+            done, remaining, limit_hit = await _batch_edit_account(
+                br, page0, remaining, edit_prompt, sdir, n, len(results_by_idx),
+                ratio, concurrency, cancel, progress, profile_name=prof_name,
+            )
+            results_by_idx.update(done)
+            if limit_hit:
+                _emit(progress, "account_limit",
+                      {"profile": prof_name, "remaining": len(remaining)})
+        except StopRequested:
+            user_stopped = True
+        except Exception as e:
+            _emit(progress, "account_error",
+                  {"profile": prof_name, "error": repr(e)})
+        finally:
+            await br.close()
+
+    if user_stopped:
+        _emit(progress, "stopped", {"remaining": len(remaining)})
+    elif remaining:
+        _emit(progress, "exhausted", {"remaining": len(remaining)})
+
+    results = []
+    for idx, path in items:
+        if idx in results_by_idx:
+            results.append(results_by_idx[idx])
+        else:
+            results.append({
+                "type": "batch_edit", "label": Path(path).name,
+                "prompt": edit_prompt, "image": None, "status": "skipped",
+                "conversation_url": "", "error": "hết tài khoản", "profile": "",
+            })
+
+    out = {
+        "session_id": sid, "dir": str(sdir), "results": results,
+        "ok_count": sum(1 for r in results if r["status"] == "success"), "total": n,
+    }
+    store.write_results(sdir, out)
+    _emit(progress, "done", {"ok": out["ok_count"], "total": n})
+    return out
 
 
 async def _read_session_email(page) -> str:
