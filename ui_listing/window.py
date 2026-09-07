@@ -23,6 +23,8 @@ from config import (
     PROMPT_TYPES, PROMPT_TYPE_LABELS, DEFAULT_TYPES, DEFAULT_CONCURRENCY,
     BASE_DIR, profile_path, list_profile_names, PROFILES_ROOT, load_account_names,
 )
+import tnt_track
+from tnt_feedback import FeedbackBar
 from ui_listing import theme
 from ui_listing.widgets import ImagePicker, ResultCard, EditDialog, ImageViewer
 from ui_listing.workers import (
@@ -141,6 +143,25 @@ class MainWindow(QMainWindow):
         outer.addWidget(split, 1)
 
         self._setup_tray()
+
+        # Theo dõi MỘT VIỆC = một lần làm ra bộ ảnh listing. Tool này nhiều pha
+        # (prompt -> ảnh -> SEO -> sửa) nên đo THỜI GIAN TỪNG PHA riêng, nhờ đó
+        # bảng "tốc độ từng pha" trên dashboard chỉ ra được pha nào chậm nhất.
+        self._job_t0 = {}
+        tnt_track.feature_open()
+
+    # ------------------------------------------------------------------ #
+    #  ĐO THỜI GIAN MÁY CHẠY TỪNG PHA
+    # ------------------------------------------------------------------ #
+    def _job_begin(self, phase: str, **props):
+        self._job_t0[phase] = time.time()
+        tnt_track.job_started(phase, **props)
+
+    def _job_end(self, phase: str, ok: bool = True, **props):
+        t0 = self._job_t0.pop(phase, 0.0)
+        if not t0:
+            return
+        tnt_track.job_done(phase, int((time.time() - t0) * 1000), ok=ok, **props)
 
     # ------------------------------------------------------------------ #
     #  THÔNG BÁO NGOÀI APP (system tray toast) — hiện cả khi thu nhỏ app
@@ -540,6 +561,9 @@ class MainWindow(QMainWindow):
         self.lbl_gallery_count.setProperty("muted", True)
         gbar.addWidget(self.lbl_gallery_count)
         gbar.addStretch(1)
+        # Thanh 👍/👎 — ẩn cho tới khi tạo/sửa ảnh xong (xem _on_gen_done).
+        self.fb = FeedbackBar(accent=theme.ORANGE, muted=theme.TEXT_MUTED)
+        gbar.addWidget(self.fb)
         gtl.addLayout(gbar)
 
         gwrap = QScrollArea()
@@ -925,6 +949,8 @@ class MainWindow(QMainWindow):
         self._set_running(True, "Đang tạo prompt")
         self._logline(">> [①] Tạo prompt (tiếng Việt)...")
         self.prompt_worker = PromptWorker(params)
+        tnt_track.run_click({"phase": "analyze_generate"})
+        self._job_begin("analyze_generate")
         self._active = self.prompt_worker
         self.prompt_worker.progress.connect(self._on_progress)
         self.prompt_worker.done.connect(self._on_prompts_done)
@@ -933,6 +959,7 @@ class MainWindow(QMainWindow):
         self.prompt_worker.start()
 
     def _on_prompts_done(self, analysis: dict):
+        self._job_end("analyze_generate")
         # giữ attributes/theme, gộp seo cũ nếu đã có
         old_seo = self.analysis.get("seo", {})
         self.analysis = analysis
@@ -949,6 +976,7 @@ class MainWindow(QMainWindow):
             "'② TẠO ẢNH + BÀI VIẾT SEO'.")
 
     def _on_prompts_fail(self, err: str):
+        self._job_end("analyze_generate", ok=False, error=err[:80])
         self._set_running(False)
         self._logline(f">> ✗ Lỗi tạo prompt: {err}")
         self._notify("Tạo prompt LỖI", err, success=False)
@@ -973,6 +1001,8 @@ class MainWindow(QMainWindow):
         self._set_running(True, "Đang tạo SEO")
         self._logline(">> Tạo bài viết & tiêu đề SEO...")
         self.seo_worker = SeoWorker(params)
+        tnt_track.run_click({"phase": "seo"})
+        self._job_begin("seo")
         self._active = self.seo_worker
         self.seo_worker.progress.connect(self._on_progress)
         self.seo_worker.done.connect(self._on_seo_done)
@@ -981,6 +1011,7 @@ class MainWindow(QMainWindow):
         self.seo_worker.start()
 
     def _on_seo_done(self, data: dict):
+        self._job_end("seo")
         self._set_running(False)
         self.analysis["seo"] = data.get("seo", {})
         if not self.analysis.get("attributes"):
@@ -993,6 +1024,7 @@ class MainWindow(QMainWindow):
             "Bài viết & tiêu đề SEO đã xong. Xem/Copy ở tab 'SEO / Bài viết'.")
 
     def _on_seo_fail(self, err: str):
+        self._job_end("seo", ok=False, error=err[:80])
         self._set_running(False)
         self._logline(f">> ✗ Lỗi tạo SEO: {err}")
         self._notify("Tạo SEO LỖI", err, success=False)
@@ -1072,6 +1104,10 @@ class MainWindow(QMainWindow):
                       + (" + bài viết SEO" if want_seo else "")
                       + " (tự xoay tài khoản khi hết lượt)...")
         self.gen_worker = GenerateWorker(params)
+        tnt_track.run_click({"phase": "generate", "prompts": len(prompts),
+                             "with_seo": bool(want_seo)})
+        self.fb.reset()
+        self._job_begin("generate", images=len(prompts))
         self._active = self.gen_worker
         self.gen_worker.progress.connect(self._on_progress)
         self.gen_worker.done.connect(self._on_gen_done)
@@ -1115,6 +1151,8 @@ class MainWindow(QMainWindow):
             self._logline(f">> HOÀN TẤT: {data.get('ok')}/{data.get('total')} ảnh.")
 
     def _on_gen_done(self, out: dict):
+        self._job_end("generate", ok=bool(out.get("ok_count")),
+                      images=out.get("ok_count", 0))
         self._set_running(False)
         self.results = [r for r in out.get("results", []) if r.get("status") == "success"]
         self.session_dir = out.get("dir")
@@ -1123,6 +1161,8 @@ class MainWindow(QMainWindow):
             self.analysis["seo"] = out.get("seo", {})
             self._fill_seo(out)
         self._show_tab(self.tab_gallery)
+        if out.get("ok_count"):
+            self.fb.ask()          # không ra ảnh nào thì KHÔNG hỏi
         skipped = out.get("total", 0) - out.get("ok_count", 0)
         msg = f">> Kết quả tại: {self.session_dir}"
         if skipped > 0:
@@ -1142,6 +1182,7 @@ class MainWindow(QMainWindow):
         self._notify("Đã tạo ảnh xong", pop, success=skipped == 0)
 
     def _on_gen_fail(self, err: str):
+        self._job_end("generate", ok=False, error=err[:80])
         self._set_running(False)
         self._logline(f">> ✗ LỖI: {err}")
         self._notify("Tạo ảnh LỖI", err, success=False)
@@ -1196,6 +1237,9 @@ class MainWindow(QMainWindow):
         self.batch_worker = BatchEditWorker(
             imgs, prompt, ratio, self._profiles_for_rotation(),
             self.sp_conc.value(), self.chk_hidden.isChecked())
+        tnt_track.retry("edit_request", {"phase": "batch_edit", "images": len(imgs)})
+        self.fb.reset()
+        self._job_begin("batch_edit", images=len(imgs))
         self._active = self.batch_worker
         self.batch_worker.progress.connect(self._on_progress)
         self.batch_worker.done.connect(self._on_batch_done)
@@ -1204,6 +1248,8 @@ class MainWindow(QMainWindow):
         self.batch_worker.start()
 
     def _on_batch_done(self, out: dict):
+        self._job_end("batch_edit", ok=bool(out.get("ok_count")),
+                      images=out.get("ok_count", 0))
         self._set_running(False)
         self.results = [r for r in out.get("results", [])
                         if r.get("status") == "success"]
@@ -1213,6 +1259,8 @@ class MainWindow(QMainWindow):
         ok = out.get("ok_count", len(self.results))
         total = out.get("total", ok)
         skipped = total - ok
+        if ok:
+            self.fb.ask()
         self._logline(f">> ✓ Sửa hàng loạt xong: {ok}/{total} ảnh. "
                       f"Kết quả tại: {self.session_dir}")
         pop = f"Đã sửa xong {ok}/{total} ảnh."
@@ -1223,6 +1271,7 @@ class MainWindow(QMainWindow):
         self._notify("Đã sửa hàng loạt xong", pop, success=skipped == 0)
 
     def _on_batch_fail(self, err: str):
+        self._job_end("batch_edit", ok=False, error=err[:80])
         self._set_running(False)
         self._logline(f">> ✗ LỖI sửa hàng loạt: {err}")
         self._notify("Sửa hàng loạt LỖI", err, success=False)
@@ -1288,6 +1337,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Lỗi lưu ảnh", str(e))
             return
         self._last_save_dir = str(Path(dest).parent)
+        tnt_track.output("png", {"count": 1, "mode": "one"})
         self._logline(f">> Đã lưu ảnh: {dest}")
         self.statusBar().showMessage(f"Đã lưu: {Path(dest).name}", 4000)
 
@@ -1323,6 +1373,8 @@ class MainWindow(QMainWindow):
                 fail.append(r.get("type") or f"ảnh {i}")
 
         self._last_save_dir = folder
+        if ok:
+            tnt_track.output("png", {"count": ok, "mode": "all"})
         self._logline(f">> Đã tải {ok}/{len(self.results)} ảnh về: {sub}")
         msg = f"Đã lưu {ok}/{len(self.results)} ảnh vào:\n{sub}"
         if fail:
@@ -1545,6 +1597,7 @@ class MainWindow(QMainWindow):
                                 f"Không mở được thư mục:\n{d}\n\n{ex}")
 
     def closeEvent(self, e):
+        tnt_track.shutdown()
         # tránh treo khi đóng lúc worker đang chạy
         for w in [self.gen_worker, self.prompt_worker, self.seo_worker,
                   self.batch_worker, self.login_worker, self.names_worker,
