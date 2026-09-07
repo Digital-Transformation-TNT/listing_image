@@ -31,7 +31,8 @@ binaries = []
 for _logo in ("logo.icns", "logo.png"):
     if os.path.exists(_logo):
         datas.append((_logo, "."))
-hiddenimports = ["core", "ui_listing", "tnt_license", "cryptography"]
+hiddenimports = ["core", "ui_listing", "tnt_license", "cryptography",
+                 "tnt_track", "tnt_feedback"]
 
 # Playwright cần kèm driver (node); cryptography có phần Rust (_rust)+cffi -> collect_all
 # mới gói đủ, tránh lỗi "No module named 'cryptography'" trên máy đích.
