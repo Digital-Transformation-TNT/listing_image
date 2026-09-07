@@ -20,7 +20,12 @@ try:
 except Exception:
     pass
 
+import tnt_track
 from tnt_license import check_license
+
+# Khoá tool trong nhật ký sử dụng — ĐỂ RIÊNG với "listing_image" của bản web,
+# gộp chung thì bảng "Chi tiết theo tool" cộng số của hai bản làm một.
+FEATURE = "listing_image_app"
 from core.pipeline import run_pipeline
 from config import DEFAULT_TYPES, DEFAULT_CONCURRENCY, PROMPT_TYPE_KEYS, profile_path
 
@@ -68,7 +73,9 @@ async def _main(args) -> None:
 
 
 def main() -> None:
-    check_license("TNT_Listing")   # BẢO MẬT LICENSE
+    info = check_license("TNT_Listing")
+    # Chỉ ĐỌC tên nhân viên đã ký sẵn trong license.
+    tnt_track.init(FEATURE, license_info=info, tool="TNT_Listing")   # BẢO MẬT LICENSE
     ap = argparse.ArgumentParser(description="TNT Listing Image — pipeline web (song song)")
     ap.add_argument("--product", required=True, help="Ảnh sản phẩm (bắt buộc)")
     ap.add_argument("--person", help="Ảnh người mẫu (tùy chọn)")
