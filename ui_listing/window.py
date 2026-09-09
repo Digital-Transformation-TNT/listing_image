@@ -144,11 +144,14 @@ class MainWindow(QMainWindow):
 
         self._setup_tray()
 
-        # Theo dõi MỘT VIỆC = một lần làm ra bộ ảnh listing. Tool này nhiều pha
-        # (prompt -> ảnh -> SEO -> sửa) nên đo THỜI GIAN TỪNG PHA riêng, nhờ đó
-        # bảng "tốc độ từng pha" trên dashboard chỉ ra được pha nào chậm nhất.
+        # Tool này nhiều pha (prompt -> ảnh -> SEO -> sửa) nên đo THỜI GIAN TỪNG
+        # PHA riêng, nhờ đó bảng "tốc độ từng pha" chỉ ra được pha nào chậm nhất.
+        #
+        # KHÔNG mở "việc" ở đây. Mở app rồi đóng luôn mà cũng tính một việc thì
+        # việc đó vĩnh viễn không có sản phẩm -> bị đếm là BỎ DỞ, kéo tụt "Tỷ lệ
+        # hoàn thành" bằng thứ không phải công việc. Việc chỉ mở khi người dùng
+        # THẬT SỰ bấm chạy: run_click()/retry() tự mở nếu chưa có việc nào.
         self._job_t0 = {}
-        tnt_track.feature_open()
 
     # ------------------------------------------------------------------ #
     #  ĐO THỜI GIAN MÁY CHẠY TỪNG PHA
