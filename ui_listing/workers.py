@@ -16,8 +16,13 @@ from core.pipeline import (
     make_prompts_pipeline, make_seo_pipeline, generate_from_prompts,
     edit_image, batch_edit_images, do_login, refresh_account_names,
 )
-from core.aio_chatgpt import StopRequested
+from core.aio_chatgpt import StopRequested, ChatGPTPageError
 from config import profile_path
+
+
+def _err_text(e: Exception) -> str:
+    """Lỗi đã có câu tiếng Việt dễ hiểu thì hiện nguyên câu, còn lại giữ repr."""
+    return str(e) if isinstance(e, ChatGPTPageError) else repr(e)
 
 
 class NamesWorker(QThread):
@@ -39,7 +44,7 @@ class NamesWorker(QThread):
                 self.profiles, hidden=self.hidden, progress=cb))
             self.done.emit(out)
         except Exception as e:
-            self.failed.emit(repr(e))
+            self.failed.emit(_err_text(e))
 
 
 class _CancellableWorker(QThread):
@@ -70,7 +75,7 @@ class _CancellableWorker(QThread):
             if self.cancel_event.is_set():
                 self.stopped.emit()
             else:
-                self.failed.emit(repr(e))
+                self.failed.emit(_err_text(e))
 
 
 class PromptWorker(_CancellableWorker):
@@ -129,7 +134,7 @@ class BatchEditWorker(QThread):
             if self.cancel_event.is_set():
                 self.stopped.emit()
             else:
-                self.failed.emit(repr(e))
+                self.failed.emit(_err_text(e))
 
 
 class EditWorker(QThread):
@@ -161,7 +166,7 @@ class EditWorker(QThread):
             else:
                 self.failed.emit("Không tạo được ảnh mới (có thể hết lượt).")
         except Exception as e:
-            self.failed.emit(repr(e))
+            self.failed.emit(_err_text(e))
 
 
 class LoginWorker(QThread):
@@ -177,4 +182,4 @@ class LoginWorker(QThread):
             ok = asyncio.run(do_login(profile_dir=profile_path(self.profile)))
             self.done.emit(ok)
         except Exception as e:
-            self.failed.emit(repr(e))
+            self.failed.emit(_err_text(e))

@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from playwright.async_api import Page, TimeoutError as PWTimeout
 
-from config import CHATGPT_URL
+from config import CHATGPT_URL, OUTPUT_DIR
 
 SEL_COMPOSER = "#prompt-textarea"
 SEL_FILE_INPUT = 'input[type="file"]'
@@ -49,6 +49,44 @@ class StopRequested(Exception):
 
 class SendError(Exception):
     """Không gửi được tin nhắn (nút gửi không sẵn sàng / UI đổi)."""
+
+
+class ChatGPTPageError(RuntimeError):
+    """Trang ChatGPT không vào được ô chat (đăng xuất / bị bắt xác minh / đổi giao diện)."""
+
+
+# Dò TÌNH TRẠNG trang khi không thấy ô chat → báo đúng nguyên nhân cho người dùng.
+_DIAGNOSE_JS = """() => {
+    const t = ((document.body && document.body.innerText) || '').toLowerCase();
+    const url = location.href;
+    const cf = !!document.querySelector(
+        'iframe[src*="challenges.cloudflare.com"], #challenge-form, '
+        + '#cf-challenge-running, #challenge-stage')
+        || /verify you are human|xác minh bạn là con người|just a moment|checking your browser|unusual activity/.test(t);
+    const login = !!document.querySelector(
+        '[data-testid="login-button"], [data-testid="signup-button"]')
+        || /auth\\.openai\\.com|\\/auth\\/login|\\/log-?in/.test(url)
+        || /session has expired|phiên.*hết hạn|log in again|đăng nhập lại/.test(t);
+    return {cf, login, url, title: document.title || ''};
+}"""
+
+
+def explain_page_problem(info: dict) -> str:
+    """Đổi kết quả dò trang thành câu báo lỗi tiếng Việt kèm cách xử lý."""
+    info = info or {}
+    if info.get("cf"):
+        return ("ChatGPT đang bắt XÁC MINH 'bạn có phải người thật' (Cloudflare). "
+                "Cách xử lý: BỎ TICK 'Chạy ngầm', bấm chạy lại, rồi bấm xác minh "
+                "trong cửa sổ Chrome hiện ra (thường chỉ cần 1 lần), sau đó bật "
+                "lại 'Chạy ngầm'.")
+    if info.get("login"):
+        return ("Tài khoản ChatGPT đã bị ĐĂNG XUẤT (phiên hết hạn). Cách xử lý: "
+                "chọn đúng tài khoản rồi bấm 'Đăng nhập tài khoản' để đăng nhập lại.")
+    where = " ".join(x for x in (info.get("title"), info.get("url")) if x)
+    return ("Không thấy ô nhập chat của ChatGPT"
+            + (f" (trang đang mở: {where})" if where else "") +
+            ". Cách xử lý: BỎ TICK 'Chạy ngầm' và chạy lại để xem cửa sổ Chrome "
+            "đang hiện gì; nếu ChatGPT đã đổi giao diện thì cần cập nhật tool.")
 
 
 class AioSession:
@@ -129,13 +167,47 @@ class AioSession:
         except Exception:
             pass
         await self.page.goto(CHATGPT_URL, wait_until="domcontentloaded")
-        await self.page.wait_for_selector(SEL_COMPOSER, timeout=30000)
+        await self.wait_composer()
         await self.page.wait_for_timeout(300)
         self.http_error = 0
 
+    async def wait_composer(self, timeout_ms: int = 30000) -> None:
+        """Chờ ô chat xuất hiện. Không thấy → tải lại trang thử thêm 1 lần (mạng
+        chậm / trang treo); vẫn không thấy → dò nguyên nhân + chụp màn hình rồi
+        báo lỗi DỄ HIỂU thay cho 'Timeout 30000ms exceeded' khó đoán."""
+        try:
+            await self.page.wait_for_selector(SEL_COMPOSER, timeout=timeout_ms)
+            return
+        except PWTimeout:
+            pass
+        self._stop()
+        try:
+            await self.page.reload(wait_until="domcontentloaded")
+            await self.page.wait_for_selector(SEL_COMPOSER, timeout=timeout_ms)
+            return
+        except PWTimeout:
+            pass
+        raise ChatGPTPageError(await self._diagnose())
+
+    async def _diagnose(self) -> str:
+        try:
+            info = await self.page.evaluate(_DIAGNOSE_JS)
+        except Exception:
+            info = {}
+        shot = ""
+        try:
+            d = OUTPUT_DIR / "_loi"
+            d.mkdir(parents=True, exist_ok=True)
+            f = d / time.strftime("chatgpt_%y%m%d_%H%M%S.png")
+            await self.page.screenshot(path=str(f))
+            shot = f" Ảnh chụp màn hình lúc lỗi: {f}"
+        except Exception:
+            pass
+        return explain_page_problem(info) + shot
+
     async def open_conversation(self, url: str) -> None:
         await self.page.goto(url, wait_until="domcontentloaded")
-        await self.page.wait_for_selector(SEL_COMPOSER, timeout=30000)
+        await self.wait_composer()
         for _ in range(3):
             await self.page.mouse.wheel(0, 2500)
             await self.page.wait_for_timeout(500)
