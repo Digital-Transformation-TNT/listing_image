@@ -82,6 +82,61 @@ async def run():
             await b.close()
 
 
+# Giao diện MỚI (10/2026): ô soạn KHÔNG còn id #prompt-textarea.
+SEND_JS = ("<script>document.addEventListener('click', ev => {"
+           "  if (!ev.target.closest('[data-testid=send-button]')) return;"
+           "  const c = document.querySelector('[contenteditable=true], textarea');"
+           "  if (c.tagName === 'TEXTAREA') c.value = ''; else c.innerText = '';"
+           "  window.__sent = (window.__sent || 0) + 1; });</script>")
+NEW_UI = {
+    "contenteditable": '<form><div class="ProseMirror" contenteditable="true" '
+                       'role="textbox" style="min-height:40px">&nbsp;</div>'
+                       '<button type="button" data-testid="send-button">Send</button></form>',
+    "textarea": '<form><textarea placeholder="Ask ChatGPT"></textarea>'
+                '<button type="button" data-testid="send-button">Send</button></form>',
+}
+
+
+async def run_new_ui():
+    exe = "/opt/pw-browsers/chromium"
+    async with async_playwright() as p:
+        kw = {"executable_path": exe} if os.path.exists(exe) else {}
+        b = await p.chromium.launch(**kw)
+        try:
+            for kind, html in NEW_UI.items():
+                page = await b.new_page()
+
+                async def handle(route, _request=None, html=html):
+                    await route.fulfill(status=200, content_type="text/html",
+                                        body=f"<html><body>{html}{SEND_JS}</body></html>")
+                await page.route("https://chatgpt.com/**", handle)
+                await page.goto("https://chatgpt.com/")
+                s = AioSession(page)
+                err = None
+                try:
+                    await s.wait_composer(timeout_ms=2000)
+                except ChatGPTPageError as e:
+                    err = str(e)
+                check(f"[{kind}] tìm được ô soạn kiểu mới", err is None, err or "")
+                await s.type_prompt("Xin chào   ChatGPT ơi")
+                got = await s._composer_text()
+                check(f"[{kind}] gõ đúng nội dung", (got or "").strip() == "Xin chào ChatGPT ơi", repr(got))
+                ok = await s.send()
+                sent = await page.evaluate("() => window.__sent || 0")
+                check(f"[{kind}] gửi được + xác nhận ô trống", ok and sent >= 1, f"ok={ok} sent={sent}")
+                await page.close()
+            # Không có ô soạn → KHÔNG được báo 'đã gửi' nhầm
+            page = await b.new_page()
+            await page.set_content("<p>trống</p>")
+            s = AioSession(page)
+            check("không thấy ô soạn → không coi là ô trống/đã gửi",
+                  await s._composer_text() is None and not await s._composer_empty())
+            await page.close()
+        finally:
+            await b.close()
+
+
 asyncio.run(run())
+asyncio.run(run_new_ui())
 print(f"\n==> {len(PASS)} passed, {len(FAIL)} failed / {len(PASS) + len(FAIL)} total")
 sys.exit(1 if FAIL else 0)

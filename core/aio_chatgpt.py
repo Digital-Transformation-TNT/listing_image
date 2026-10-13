@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -23,9 +24,55 @@ from playwright.async_api import Page, TimeoutError as PWTimeout
 
 from config import CHATGPT_URL, OUTPUT_DIR
 
-SEL_COMPOSER = "#prompt-textarea"
+SEL_COMPOSER = "#prompt-textarea"          # id CŨ — giữ để ưu tiên
+# Ô soạn sau khi _mark_composer() đã tìm ra & gắn dấu (xem _FIND_COMPOSER).
+SEL_COMPOSER_MARK = '[data-tnt-composer="1"]'
 SEL_FILE_INPUT = 'input[type="file"]'
-SEL_SEND_BTN = '[data-testid="send-button"]'
+SEL_SEND_BTN = (
+    '[data-testid="send-button"], #composer-submit-button, '
+    'button[aria-label="Send prompt"], button[aria-label*="Send message" i], '
+    'button[aria-label*="Gửi"]'
+)
+
+# Tìm Ô SOẠN TIN. ChatGPT đổi giao diện liên tục (bản 10/2026 có thanh
+# "Chat / Work", ô "Ask ChatGPT" không còn id #prompt-textarea) → dò theo NHIỀU
+# dấu hiệu, ưu tiên id cũ, chỉ lấy ô ĐANG HIỂN THỊ.
+_FIND_COMPOSER = r"""
+function __tntComposer() {
+    const vis = e => !!e && e.getClientRects().length > 0
+        && getComputedStyle(e).visibility !== 'hidden';
+    const groups = [
+        '#prompt-textarea',
+        '[data-testid*="composer" i] [contenteditable="true"]',
+        'form [contenteditable="true"][role="textbox"]',
+        '.ProseMirror[contenteditable="true"]',
+        '[contenteditable="true"][role="textbox"]',
+        '[contenteditable="true"][aria-label*="chatgpt" i]',
+        '[contenteditable="true"][aria-label*="message" i]',
+        'form textarea:not([aria-hidden="true"])',
+        'textarea[placeholder]',
+    ];
+    for (const g of groups)
+        for (const e of document.querySelectorAll(g))
+            if (vis(e)) return e;
+    return null;
+}
+"""
+# Tìm ô soạn + gắn dấu data-tnt-composer để Playwright click được. Trả True/False.
+_MARK_COMPOSER_JS = "() => {" + _FIND_COMPOSER + """
+    const el = __tntComposer();
+    document.querySelectorAll('[data-tnt-composer]').forEach(
+        e => { if (e !== el) e.removeAttribute('data-tnt-composer'); });
+    if (!el) return false;
+    el.setAttribute('data-tnt-composer', '1');
+    return true;
+}"""
+# Chữ đang có trong ô soạn; null = KHÔNG tìm thấy ô (khác với ô trống "").
+_COMPOSER_TEXT_JS = "() => {" + _FIND_COMPOSER + """
+    const e = __tntComposer();
+    if (!e) return null;
+    return (e.tagName === 'TEXTAREA' ? e.value : e.innerText) || '';
+}"""
 SEL_STOP_BTN = (
     'button[data-testid="stop-button"], button[aria-label*="Stop streaming"], '
     'button[aria-label*="Dừng"], button[aria-label*="Ngừng"]'
@@ -158,7 +205,8 @@ class AioSession:
                 btn = self.page.locator(SEL_NEW_CHAT).first
                 if await btn.count() > 0 and await btn.is_visible():
                     await btn.click()
-                    await self.page.wait_for_selector(SEL_COMPOSER, timeout=8000)
+                    if not await self._poll_composer(8000):
+                        raise PWTimeout("composer")
                     for _ in range(12):
                         if await self._assistant_count() == 0:
                             self.http_error = 0
@@ -175,19 +223,37 @@ class AioSession:
         """Chờ ô chat xuất hiện. Không thấy → tải lại trang thử thêm 1 lần (mạng
         chậm / trang treo); vẫn không thấy → dò nguyên nhân + chụp màn hình rồi
         báo lỗi DỄ HIỂU thay cho 'Timeout 30000ms exceeded' khó đoán."""
-        try:
-            await self.page.wait_for_selector(SEL_COMPOSER, timeout=timeout_ms)
+        if await self._poll_composer(timeout_ms):
             return
-        except PWTimeout:
-            pass
         self._stop()
         try:
             await self.page.reload(wait_until="domcontentloaded")
-            await self.page.wait_for_selector(SEL_COMPOSER, timeout=timeout_ms)
-            return
-        except PWTimeout:
+        except Exception:
             pass
+        if await self._poll_composer(timeout_ms):
+            return
         raise ChatGPTPageError(await self._diagnose())
+
+    async def _mark_composer(self) -> bool:
+        try:
+            return bool(await self.page.evaluate(_MARK_COMPOSER_JS))
+        except Exception:
+            return False
+
+    async def _poll_composer(self, timeout_ms: int) -> bool:
+        """Đợi tới khi tìm được ô soạn (đang hiển thị). True nếu thấy."""
+        deadline = time.time() + timeout_ms / 1000
+        while True:
+            self._stop()
+            if await self._mark_composer():
+                return True
+            if time.time() >= deadline:
+                return False
+            await self.page.wait_for_timeout(300)
+
+    async def _click_composer(self) -> None:
+        await self._mark_composer()
+        await self.page.locator(SEL_COMPOSER_MARK).first.click()
 
     async def _diagnose(self) -> str:
         try:
@@ -201,6 +267,9 @@ class AioSession:
             f = d / time.strftime("chatgpt_%y%m%d_%H%M%S.png")
             await self.page.screenshot(path=str(f))
             shot = f" Ảnh chụp màn hình lúc lỗi: {f}"
+            # lưu kèm mã trang → gửi cho người sửa tool để cập nhật nhận diện
+            f.with_suffix(".html").write_text(await self.page.content(),
+                                              encoding="utf-8")
         except Exception:
             pass
         return explain_page_problem(info) + shot
@@ -246,12 +315,21 @@ class AioSession:
         chính xác, không cần quyền clipboard. Có kiểm tra + fallback.
         """
         clean = " ".join(text.split())
-        await self.page.locator(SEL_COMPOSER).click()
+        await self._click_composer()
         await self.page.evaluate(
             """(text) => {
-                const el = document.querySelector('#prompt-textarea');
+                const el = document.querySelector('[data-tnt-composer="1"]');
                 if (!el) return;
                 el.focus();
+                if (el.tagName === 'TEXTAREA') {
+                    // textarea: sự kiện paste giả KHÔNG tự chèn chữ → gán value
+                    // qua setter gốc để React nhận biết thay đổi.
+                    const set = Object.getOwnPropertyDescriptor(
+                        HTMLTextAreaElement.prototype, 'value').set;
+                    set.call(el, text);
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    return;
+                }
                 const dt = new DataTransfer();
                 dt.setData('text/plain', text);
                 el.dispatchEvent(new ClipboardEvent('paste',
@@ -261,24 +339,24 @@ class AioSession:
         )
         await self.page.wait_for_timeout(200)
         # kiểm tra, nếu lệch thì thử lại bằng insert_text
-        got = await self.page.evaluate(
-            "() => (document.querySelector('#prompt-textarea')||{}).innerText || ''"
-        )
+        got = await self._composer_text() or ""
         if " ".join(got.split()) != clean:
-            await self.page.evaluate(
-                "() => { const e=document.querySelector('#prompt-textarea');"
-                " if(e){e.focus();document.execCommand('selectAll',false,null);} }"
-            )
+            await self._click_composer()
+            await self.page.keyboard.press(
+                "Meta+A" if sys.platform == "darwin" else "Control+A")
             await self.page.keyboard.press("Delete")
             await self.page.keyboard.insert_text(clean)
 
-    async def _composer_text(self) -> str:
+    async def _composer_text(self) -> Optional[str]:
+        """Chữ trong ô soạn; None nếu KHÔNG tìm thấy ô (đừng coi là 'đã gửi')."""
         try:
-            return await self.page.evaluate(
-                "() => (document.querySelector('#prompt-textarea')||{}).innerText || ''"
-            )
+            return await self.page.evaluate(_COMPOSER_TEXT_JS)
         except Exception:
-            return ""
+            return None
+
+    async def _composer_empty(self) -> bool:
+        t = await self._composer_text()
+        return t is not None and not t.strip()
 
     async def _send_ready(self) -> bool:
         """Nút gửi ĐÃ SẴN SÀNG chưa? False khi ảnh còn upload (nút bị disabled).
@@ -320,24 +398,24 @@ class AioSession:
         # 2) gửi + xác nhận đã gửi (ô soạn trống / bắt đầu sinh / luồng mạng chạy)
         for _ in range(6):
             self._stop()
-            if not (await self._composer_text()).strip():
+            if await self._composer_empty():
                 return True                      # ô đã trống = đã gửi
             try:
                 if await self._send_ready():
                     await self.page.locator(SEL_SEND_BTN).first.click()
                 else:
-                    await self.page.locator(SEL_COMPOSER).click()
+                    await self._click_composer()
                     await self.page.keyboard.press("Enter")
             except Exception:
                 try:
-                    await self.page.locator(SEL_COMPOSER).click()
+                    await self._click_composer()
                     await self.page.keyboard.press("Enter")
                 except Exception:
                     pass
             for _ in range(12):                  # chờ xác nhận ~3s mỗi lần bấm
                 await self.page.wait_for_timeout(250)
                 self._stop()
-                if not (await self._composer_text()).strip():
+                if await self._composer_empty():
                     return True
                 if self.stream_finished() or await self._is_generating():
                     return True
