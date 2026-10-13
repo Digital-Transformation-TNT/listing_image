@@ -162,6 +162,36 @@ def _variant_note(p_type: str, variant_index: int, n_products: int) -> str:
     )
 
 
+def _product_spec_note(attributes: Optional[dict], n_products: int = 1) -> str:
+    """ĐẶC TẢ sản phẩm (bộ phận + màu + bề mặt + hình dạng + chữ nhãn nguyên văn)
+    lấy từ bước đọc ảnh → model tạo ảnh bám đúng sản phẩm, ít lệch màu/sai nhãn.
+
+    Nhiều biến thể màu thì BỎ màu ở từng bộ phận (màu đã do _variant_note quyết
+    định theo từng ảnh) — giữ lại thì sẽ khoá cả bộ về màu của ảnh đầu tiên."""
+    a = attributes if isinstance(attributes, dict) else {}
+    multi = max(1, int(n_products or 1)) > 1
+    parts = []
+    for p in a.get("parts") or []:
+        if not isinstance(p, dict) or not p.get("name"):
+            continue
+        keys = ("finish", "shape") if multi else ("color", "finish", "shape")
+        desc = ", ".join(str(p[k]).strip() for k in keys
+                         if p.get(k) and str(p[k]).strip())
+        parts.append(f"{p['name']} ({desc})" if desc else str(p["name"]))
+    notes = []
+    if parts:
+        notes.append("ĐẶC TẢ SẢN PHẨM phải khớp đúng: " + "; ".join(parts) + ".")
+    if a.get("applicator"):
+        notes.append(f"Có dụng cụ đi kèm: {a['applicator']}.")
+    label = str(a.get("exact_label_string") or "").strip()
+    if label:
+        notes.append(
+            f'Chữ IN TRÊN NHÃN sản phẩm giữ NGUYÊN VĂN: "{label}" — không đổi, '
+            "không thêm bớt ký tự, không tự dịch."
+        )
+    return " ".join(notes)
+
+
 def build_edit_prompt(user_edit: str, has_ref: bool = False) -> str:
     """Prompt SỬA ẢNH: tạo lại đúng ảnh đính kèm + chỉ áp dụng thay đổi user yêu cầu."""
     ref = (" Ảnh thứ 2 là ẢNH THAM CHIẾU: dùng làm mẫu cho yêu cầu "
@@ -259,7 +289,8 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
                         has_scene: bool, notable_details=None,
                         theme: str = "", shop: str = "", logo_img: bool = False,
                         language: str = "en", n_products: int = 1,
-                        p_type: str = "", variant_index: int = 1) -> str:
+                        p_type: str = "", variant_index: int = 1,
+                        attributes: Optional[dict] = None) -> str:
     """Ghép prompt cuối: nội dung + giữ nguyên sản phẩm/người + CHÂN THỰC + an toàn."""
     notes = []
     notes.append(_lang_note(language))
@@ -329,6 +360,10 @@ def _build_final_prompt(prompt: str, refs: List[Path], has_person: bool,
                 "phẩm để ảnh liền mạch, không giống ghép cắt dán."
             )
 
+    spec = _product_spec_note(attributes, n_products)
+    if spec:
+        notes.append(spec)
+
     if notable_details:
         dl = ", ".join(str(d) for d in notable_details if d)
         if dl:
@@ -379,6 +414,7 @@ async def generate_one(
     logo: Optional[Path] = None,
     language: str = "en",
     variant_index: int = 1,
+    attributes: Optional[dict] = None,
 ) -> dict:
     """Tạo 1 ảnh, tải về dest. Trả result {type,label,prompt,image,status,error}.
 
@@ -392,7 +428,7 @@ async def generate_one(
     final_prompt = _build_final_prompt(
         prompt_obj["prompt"], refs, has_person, has_scene, notable_details,
         theme, shop, logo_img=bool(logo), language=language, n_products=n_products,
-        p_type=p_type, variant_index=variant_index,
+        p_type=p_type, variant_index=variant_index, attributes=attributes,
     )
 
     last_err = ""

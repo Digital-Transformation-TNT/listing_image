@@ -21,7 +21,7 @@ from core.analyzer import (
 from core.generator import (
     generate_one, to_square, to_ratio, build_edit_prompt,
 )
-from core.qc import qc_image
+from core.qc import qc_image, qc_failed
 from core import store
 from config import (
     OUTPUT_DIR, DEFAULT_TYPES, DEFAULT_CONCURRENCY, DEFAULT_QC,
@@ -37,6 +37,44 @@ def _emit(cb: ProgressCB, event: str, data: dict) -> None:
             cb(event, data)
         except Exception:
             pass
+
+
+# Số lần TẠO LẠI khi QC chấm sai sản phẩm (mỗi lần tốn thêm 1 lượt tạo ảnh).
+QC_REGEN = 1
+
+
+async def _generate_checked(sess, prompt_obj, product, person, scene, dest,
+                            attributes, theme, shop, logo, language, idx,
+                            qc: bool) -> dict:
+    """Tạo 1 ảnh; nếu BẬT QC mà ảnh bị chấm SAI SẢN PHẨM thì tạo lại (QC_REGEN lần).
+
+    Tạo lại hỏng (lỗi/hết lượt) thì GIỮ ảnh cũ — có ảnh hơi lệch vẫn hơn không có."""
+    n_products = len(product) if isinstance(product, (list, tuple)) else 1
+
+    async def _gen():
+        return await generate_one(
+            sess, prompt_obj, product, person, scene, dest=dest,
+            notable_details=(attributes or {}).get("notable_details"),
+            theme=theme, shop=shop, logo=logo, language=language,
+            variant_index=idx, attributes=attributes,
+        )
+
+    res = await _gen()
+    if not qc or res["status"] != "success":
+        return res
+    res["qc"] = await qc_image(sess, res["image"], attributes or {},
+                               n_products=n_products)
+    for _ in range(QC_REGEN):
+        if not qc_failed(res["qc"]):
+            break
+        again = await _gen()
+        if again["status"] != "success":
+            break
+        again["qc"] = await qc_image(sess, again["image"], attributes or {},
+                                     n_products=n_products)
+        again["qc_regenerated"] = True
+        res = again
+    return res
 
 
 def _filter_prompts(prompts: List[dict], types: List[str], quantity: int) -> List[dict]:
@@ -125,14 +163,10 @@ async def _finish_generate(br, first_session, prompts, product, person, scene,
         try:
             tag = f"{idx:02d}_{prompt_obj['type']}"
             dest = sdir / f"{tag}.png"
-            res = await generate_one(
-                sess, prompt_obj, product, person, scene, dest=dest,
-                notable_details=(attributes or {}).get("notable_details"),
-                theme=theme, shop=shop, logo=logo, language=language,
-                variant_index=idx,
+            res = await _generate_checked(
+                sess, prompt_obj, product, person, scene, dest, attributes,
+                theme, shop, logo, language, idx, qc,
             )
-            if qc and res["status"] == "success":
-                res["qc"] = await qc_image(sess, res["image"], attributes or {})
         finally:
             pool.put_nowait(sess)
         async with lock:
@@ -303,17 +337,13 @@ async def _batch_account(br, page0, items, product, person, scene, attributes,
             try:
                 tag = f"{idx:02d}_{prompt_obj['type']}"
                 dest = sdir / f"{tag}.png"
-                res = await generate_one(
-                    sess, prompt_obj, product, person, scene, dest=dest,
-                    notable_details=(attributes or {}).get("notable_details"),
-                    theme=theme, shop=shop, logo=logo, language=language,
-                    variant_index=idx,
+                res = await _generate_checked(
+                    sess, prompt_obj, product, person, scene, dest, attributes,
+                    theme, shop, logo, language, idx, qc,
                 )
                 # đóng dấu TÀI KHOẢN đã tạo ảnh này → lúc sửa mở đúng tài khoản
                 res["profile"] = profile_name
                 if res["status"] == "success":
-                    if qc:
-                        res["qc"] = await qc_image(sess, res["image"], attributes or {})
                     async with lock:
                         consec["n"] = 0
                         done[idx] = res

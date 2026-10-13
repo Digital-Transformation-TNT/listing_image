@@ -30,6 +30,8 @@ Chrome không bóp tốc độ tab đang ẩn — thiếu chúng thì ChatGPT đ
   keywords + category.
 - **Sửa ảnh bằng prompt** (mở lại chat cũ, gửi yêu cầu sửa + ảnh tham chiếu).
 - Tạo ảnh **song song nhiều tab** (nhanh).
+- **Kiểm tra ảnh (QC)** tuỳ chọn: ChatGPT soi lại từng ảnh, sai sản phẩm thì
+  tự tạo lại 1 lần (chậm hơn, tốn thêm lượt).
 
 ## Cài đặt
 
@@ -81,6 +83,7 @@ Máy đích cần chạy `playwright install chrome` (browser không nhúng tron
 ```bash
 python tests/test_unit.py          # logic thuần (không cần trình duyệt)
 python tests/test_features.py      # ép chữ EN, nhiều ảnh SP, sửa ảnh đúng tài khoản
+python tests/test_attr_qc.py       # đặc tả SP chi tiết vào prompt + QC tự tạo lại
 python tests/test_ask_text.py      # chống lỗi "hỏi đi hỏi lại mãi" (trang giả)
 python tests/test_send.py          # chống treo khi ảnh chưa upload xong (nút gửi)
 python mac_hidden_selftest.py      # chế độ chạy ngầm có thật sự ẩn + không bị bóp tốc độ

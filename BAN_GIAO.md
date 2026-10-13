@@ -1,10 +1,17 @@
 # TNT Listing Image — Bàn giao tiến độ
 
-Repo: https://github.com/Tanashi-Titus/listing_image
-Nhánh làm việc: `fix/mac-hidden-and-prompt-loop` (CHƯA merge vào `main`)
-Cập nhật: phiên làm việc gần nhất.
+Repo: https://github.com/Digital-Transformation-TNT/listing_image
+Các mục 0–6 bên dưới ĐÃ merge vào `main` (PR #1 → #5).
 
-Toàn bộ thay đổi nằm trên nhánh trên, đã push. Tổng: ~1900 dòng thêm, 16 file.
+### Mới nhất: trích thuộc tính chi tiết + QC tự tạo lại
+- `analyzer.ATTR_RULES` + `attrs_complete`: bắt màu mô tả CỤ THỂ, finish/shape
+  từng bộ phận, chép nhãn NGUYÊN VĂN, form/applicator chỉ theo thứ nhìn thấy
+  (học từ bản web Node `listing-image`).
+- `generator._product_spec_note`: đưa đặc tả bộ phận + chữ nhãn vào prompt tạo
+  ảnh (nhiều biến thể màu thì bỏ màu để không khoá 1 màu).
+- `pipeline._generate_checked`: bật QC (ô "Kiểm tra ảnh (QC)" trên app hoặc
+  `--qc` CLI) → ảnh bị chấm SAI SẢN PHẨM được tạo lại `QC_REGEN`=1 lần; tạo lại
+  hỏng thì giữ ảnh cũ. Test: `tests/test_attr_qc.py`.
 
 ---
 
