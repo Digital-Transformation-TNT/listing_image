@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import (
-    PROMPT_TYPES, PROMPT_TYPE_LABELS, DEFAULT_TYPES, DEFAULT_CONCURRENCY,
+    PROMPT_TYPES, PROMPT_TYPE_LABELS, DEFAULT_TYPES, DEFAULT_CONCURRENCY, DEFAULT_QC,
     BASE_DIR, profile_path, list_profile_names, PROFILES_ROOT, load_account_names,
 )
 import tnt_track
@@ -373,6 +373,14 @@ class MainWindow(QMainWindow):
             "macOS: macOS không cho đẩy cửa sổ ra ngoài nên app sẽ THU NHỎ cửa sổ "
             "xuống Dock — đừng bấm mở lại cửa sổ đó trong lúc đang chạy.")
         cl.addWidget(self.chk_hidden)
+
+        self.chk_qc = QCheckBox("Kiểm tra ảnh (QC) — sai sản phẩm thì tự tạo lại")
+        self.chk_qc.setChecked(DEFAULT_QC)
+        self.chk_qc.setToolTip(
+            "Sau mỗi ảnh, ChatGPT soi lại xem có đúng sản phẩm không; sai thì tạo "
+            "lại 1 lần.\nChậm hơn và tốn thêm lượt (1 tin nhắn/ảnh, +1 lượt tạo "
+            "ảnh khi phải tạo lại).")
+        cl.addWidget(self.chk_qc)
 
         cl.addWidget(QLabel("Nguồn prompt:"))
         self.rb_chatgpt = QRadioButton("ChatGPT tự tạo (rồi vào sửa)")
@@ -1095,6 +1103,7 @@ class MainWindow(QMainWindow):
             seo=self.analysis.get("seo", {}),
             market=self.market,
             concurrency=self.sp_conc.value(),
+            qc=self.chk_qc.isChecked(),
             hidden=self.chk_hidden.isChecked(),
             profiles=self._profiles_for_rotation(),
             logo=Path(self.pick_logo.path) if self.pick_logo.path else None,

@@ -110,6 +110,43 @@ def _rules(shop: str, language: str, market: str) -> str:
 11. Mỗi ảnh bám ĐÚNG VAI TRÒ concept của nó; nội dung chữ mỗi ảnh KHÁC nhau; đa dạng bối cảnh."""
 
 
+# Quy tắc trích thuộc tính CHÍNH XÁC (mô tả màu cụ thể, chép nhãn nguyên văn...)
+# — sản phẩm được tả càng đúng thì ảnh sinh ra càng ít lệch màu/sai nhãn.
+ATTR_RULES = (
+    "QUY TẮC TRÍCH XUẤT: "
+    "(1) MÀU phải là cụm mô tả CỤ THỂ có từ bổ nghĩa (vd 'đỏ rượu vang đậm', "
+    "'hồng san hô tươi', 'bạc ánh lạnh', 'trắng ngà ấm'), KHÔNG BAO GIỜ chỉ 1 từ "
+    "chung chung như 'đỏ', 'trắng', 'đen'. "
+    "(2) 'finish' xét RIÊNG từng bộ phận theo độ phản chiếu: phản chiếu sắc nét = "
+    "glossy/metallic, tán xạ phẳng = matte, ở giữa = satin; không mặc định. "
+    "(3) 'shape' tả hình dạng đặc trưng từng bộ phận (trụ tròn trơn, thuôn, gân, "
+    "lục giác, nắp vòm...). "
+    "(4) CHỮ TRÊN NHÃN: chép NGUYÊN VĂN từng ký tự theo thứ tự trên → dưới vào "
+    "'label_lines_top_to_bottom' (thương hiệu đứng đầu), TUYỆT ĐỐI KHÔNG tự sửa "
+    "chính tả; chữ nào mờ không đọc được thì ghi vào 'confidence_notes' thay vì "
+    "đoán. 'exact_label_string' = các dòng đó nối theo đúng thứ tự đọc. "
+    "(5) 'form' chọn ĐÚNG 1 giá trị dựa trên thứ NHÌN THẤY trong ảnh, không đoán "
+    "theo loại sản phẩm. "
+    "(6) 'applicator' chỉ điền khi THẤY RÕ dụng cụ đi kèm (cọ, chổi, vòi xịt, "
+    "ống nhỏ giọt, bi lăn...), không thấy thì để ''. KHÔNG bịa. "
+    "(7) 'container' tả ngắn thân chính (hình dạng/chất liệu/bề mặt); "
+    "'cap_or_closure' tả nắp; 'label_graphics' liệt kê icon/hoạ tiết trên nhãn. "
+)
+
+
+def attrs_complete(d) -> bool:
+    """Thuộc tính đủ dùng chưa: có loại sản phẩm + ít nhất 1 bộ phận có tên & màu.
+
+    Không bắt buộc nhãn/thương hiệu vì nhiều sản phẩm (đồ gia dụng, điện tử)
+    không có chữ — bắt buộc thì sẽ hỏi lại vô ích, mỗi lần mất cả phút."""
+    if not isinstance(d, dict) or not d.get("product_type"):
+        return False
+    parts = d.get("parts")
+    return (isinstance(parts, list) and len(parts) > 0
+            and all(isinstance(p, dict) and p.get("name") and p.get("color")
+                    for p in parts))
+
+
 async def extract_attributes(
     session: AioSession,
     product_path: Path,
@@ -138,16 +175,20 @@ async def extract_attributes(
         "Liệt kê ĐẦY ĐỦ mọi bộ phận nhìn thấy (thân, nắp, nút bấm, DÂY ĐIỆN/CÁP, "
         "đầu phụ kiện, khe gió, màn hình...) vào 'parts', và ghi chi tiết đặc trưng "
         "dễ bị bỏ sót vào 'notable_details' (vd 'có dây điện dài ở đuôi', '2 nút đỏ'). "
+        + ATTR_RULES +
         "CHỈ trả về JSON hợp lệ, KHÔNG markdown, KHÔNG giải thích. Schema:\n"
         "{"
         '"brand":"","product_type":"","product_function":"",'
         '"usage_category":"","usage_action_vi":"","usage_action_en":"",'
         '"application_area_vi":"","application_area_en":"",'
-        '"form":"jar|tube|bottle_pump|bottle_spray|stick|dropper|sachet|box|other",'
+        '"form":"jar|tube|bottle_pump|bottle_spray|wand_applicator|stick|dropper|'
+        'sachet|blister|box|device|other",'
+        '"container":"","cap_or_closure":"","applicator":"",'
         '"is_cosmetic":true,"category":"","short_descriptor":"",'
         '"dominant_colors":[],"label_lines_top_to_bottom":[],"exact_label_string":"",'
+        '"label_graphics":[],'
         '"parts":[{"name":"","color":"","finish":"","shape":""}],'
-        '"notable_details":[],"key_benefits":[],'
+        '"notable_details":[],"key_benefits":[],"confidence_notes":"",'
         '"theme":"<tông màu + kiểu font + phong cách thiết kế dùng chung cho cả '
         'bộ ảnh listing, 1 câu tiếng Việt>"'
         "}"
@@ -156,10 +197,7 @@ async def extract_attributes(
     )
     # Lấy luôn 'theme' ở bước nhìn ảnh → các tab sinh prompt song song sau đó
     # đều bám CÙNG một theme mà không cần thêm lượt hỏi nào.
-    attrs = await _ask_json(
-        session, prompt, timeout_ms,
-        validate=lambda d: isinstance(d, dict) and bool(d.get("product_type")),
-    )
+    attrs = await _ask_json(session, prompt, timeout_ms, validate=attrs_complete)
     if not isinstance(attrs, dict):
         attrs = {}
     if product_info:
