@@ -93,6 +93,9 @@ INPUT_XLSX = DATA_DIR / "input.xlsx"     # danh sách job
 # Kết quả: ket_qua/{id}/v1.png, v2.png ...
 OUTPUT_DIR = BASE_DIR / "ket_qua"
 
+# Phiên bản hiện trên tiêu đề cửa sổ — để biết người dùng đang chạy bản nào.
+APP_VERSION = "2026.10.13-c"
+
 # ChatGPT
 CHATGPT_URL = "https://chatgpt.com/"
 

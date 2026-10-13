@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from config import (
     PROMPT_TYPES, PROMPT_TYPE_LABELS, DEFAULT_TYPES, DEFAULT_CONCURRENCY, DEFAULT_QC,
+    APP_VERSION,
     BASE_DIR, profile_path, list_profile_names, PROFILES_ROOT, load_account_names,
 )
 import tnt_track
@@ -77,7 +78,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("TNT Listing Image — TikTok Shop")
+        self.setWindowTitle(f"TNT Listing Image — TikTok Shop  (bản {APP_VERSION})")
         self.resize(1200, 780)
         self.gen_worker = None
         self.prompt_worker = None
@@ -1128,7 +1129,9 @@ class MainWindow(QMainWindow):
         self.gen_worker.start()
 
     def _on_progress(self, event: str, data: dict):
-        if event == "analyze_start":
+        if event == "step":
+            self._logline(f">>   · {data.get('msg', '')}")
+        elif event == "analyze_start":
             self._logline(">> Đang phân tích ảnh + sinh prompt...")
         elif event == "analyze_done":
             self._logline(f">> Xong: {data.get('n_prompts')} prompt.")

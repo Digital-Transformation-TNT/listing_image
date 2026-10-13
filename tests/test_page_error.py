@@ -136,7 +136,56 @@ async def run_new_ui():
             await b.close()
 
 
+# Không có ô chọn file sẵn: nút '+' trực tiếp mở hộp chọn file, hoặc mở MENU
+# rồi mới có mục 'Add photos & files'.
+UPLOAD_UI = {
+    "plus_direct": '<button aria-label="Add photos & files" onclick="'
+                   "const i=document.createElement('input');i.type='file';i.multiple=true;"
+                   "i.onchange=()=>{window.__files=i.files.length;};i.click();"
+                   '">+</button>',
+    "plus_menu": '<button data-testid="composer-plus-btn" onclick="'
+                 "document.getElementById('m').style.display='block'"
+                 '">+</button><div id="m" style="display:none">'
+                 '<div role="menuitem" onclick="'
+                 "const i=document.createElement('input');i.type='file';i.multiple=true;"
+                 "i.onchange=()=>{window.__files=i.files.length;};i.click();"
+                 '">Add photos &amp; files</div></div>',
+}
+
+
+async def run_upload():
+    import tempfile
+    exe = "/opt/pw-browsers/chromium"
+    tmp = Path(tempfile.mkdtemp())
+    files = []
+    for n in ("a.png", "b.png"):
+        f = tmp / n
+        f.write_bytes(b"x")
+        files.append(f)
+    async with async_playwright() as p:
+        kw = {"executable_path": exe} if os.path.exists(exe) else {}
+        b = await p.chromium.launch(**kw)
+        try:
+            for kind, html in UPLOAD_UI.items():
+                page = await b.new_page()
+                await page.set_content(html)
+                s = AioSession(page)
+                steps = []
+                s.on_step = steps.append
+                try:
+                    await s.upload_images(files, timeout_ms=500)
+                except Exception as e:
+                    steps.append(repr(e))
+                got = await page.evaluate("() => window.__files || 0")
+                check(f"[{kind}] tải ảnh qua nút đính kèm", got == 2, f"files={got} {steps}")
+                check(f"[{kind}] có ghi nhật ký bước", any("tải 2 ảnh" in x for x in steps), str(steps))
+                await page.close()
+        finally:
+            await b.close()
+
+
 asyncio.run(run())
 asyncio.run(run_new_ui())
+asyncio.run(run_upload())
 print(f"\n==> {len(PASS)} passed, {len(FAIL)} failed / {len(PASS) + len(FAIL)} total")
 sys.exit(1 if FAIL else 0)

@@ -28,6 +28,18 @@ SEL_COMPOSER = "#prompt-textarea"          # id CŨ — giữ để ưu tiên
 # Ô soạn sau khi _mark_composer() đã tìm ra & gắn dấu (xem _FIND_COMPOSER).
 SEL_COMPOSER_MARK = '[data-tnt-composer="1"]'
 SEL_FILE_INPUT = 'input[type="file"]'
+# Nút "+" / đính kèm — dùng khi giao diện không có sẵn ô chọn file ẩn.
+SEL_ATTACH_BTN = (
+    '[data-testid="composer-plus-btn"], button[aria-label*="Add photos" i], '
+    'button[aria-label*="Attach" i], button[aria-label*="Upload" i], '
+    'button[aria-label*="Add files" i], button[aria-label*="Đính kèm"], '
+    'button[aria-label*="Thêm ảnh"], button[aria-label*="Thêm tệp"]'
+)
+# Mục trong menu "+" để chọn ảnh/tệp từ máy.
+SEL_ATTACH_ITEM = (
+    '[role="menuitem"]:has-text("photo"), [role="menuitem"]:has-text("file"), '
+    '[role="menuitem"]:has-text("ảnh"), [role="menuitem"]:has-text("tệp")'
+)
 SEL_SEND_BTN = (
     '[data-testid="send-button"], #composer-submit-button, '
     'button[aria-label="Send prompt"], button[aria-label*="Send message" i], '
@@ -136,6 +148,23 @@ def explain_page_problem(info: dict) -> str:
             "đang hiện gì; nếu ChatGPT đã đổi giao diện thì cần cập nhật tool.")
 
 
+async def save_debug(page) -> str:
+    """Lưu ẢNH CHỤP + MÃ TRANG (.html) vào ket_qua/_loi/ để chẩn đoán lỗi.
+    Trả đường dẫn ảnh ('' nếu không lưu được). Không bao giờ ném lỗi."""
+    try:
+        d = OUTPUT_DIR / "_loi"
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / time.strftime("chatgpt_%y%m%d_%H%M%S.png")
+        await page.screenshot(path=str(f))
+        try:
+            f.with_suffix(".html").write_text(await page.content(), encoding="utf-8")
+        except Exception:
+            pass
+        return str(f)
+    except Exception:
+        return ""
+
+
 class AioSession:
     """Bọc 1 tab đã đăng nhập để thao tác tạo ảnh / hỏi text."""
 
@@ -145,7 +174,15 @@ class AioSession:
         self._net_done = 0   # số luồng trả lời đã kết thúc (theo dõi qua mạng)
         self._net_mark = 0   # mốc _net_done tại lần send() gần nhất
         self.http_error = 0  # mã HTTP lỗi cuối trên endpoint hội thoại
+        self.on_step = None  # callback(msg) — ghi nhật ký từng bước lên app
         self._attach_network()
+
+    def _log(self, msg: str) -> None:
+        if self.on_step:
+            try:
+                self.on_step(msg)
+            except Exception:
+                pass
 
     def _stop(self):
         if self.cancel is not None and self.cancel.is_set():
@@ -200,6 +237,7 @@ class AioSession:
         phút chết. Bấm nút 'chat mới' chỉ mất ~0.3s. Có kiểm chứng (composer
         có mặt + 0 lượt trả lời) rồi mới chấp nhận, sai thì tải lại như cũ.
         """
+        self._log("mở đoạn chat mới")
         try:
             if "chatgpt.com" in (self.page.url or ""):
                 btn = self.page.locator(SEL_NEW_CHAT).first
@@ -223,8 +261,10 @@ class AioSession:
         """Chờ ô chat xuất hiện. Không thấy → tải lại trang thử thêm 1 lần (mạng
         chậm / trang treo); vẫn không thấy → dò nguyên nhân + chụp màn hình rồi
         báo lỗi DỄ HIỂU thay cho 'Timeout 30000ms exceeded' khó đoán."""
+        self._log("chờ ô nhập chat")
         if await self._poll_composer(timeout_ms):
             return
+        self._log("chưa thấy ô nhập chat → tải lại trang")
         self._stop()
         try:
             await self.page.reload(wait_until="domcontentloaded")
@@ -260,18 +300,8 @@ class AioSession:
             info = await self.page.evaluate(_DIAGNOSE_JS)
         except Exception:
             info = {}
-        shot = ""
-        try:
-            d = OUTPUT_DIR / "_loi"
-            d.mkdir(parents=True, exist_ok=True)
-            f = d / time.strftime("chatgpt_%y%m%d_%H%M%S.png")
-            await self.page.screenshot(path=str(f))
-            shot = f" Ảnh chụp màn hình lúc lỗi: {f}"
-            # lưu kèm mã trang → gửi cho người sửa tool để cập nhật nhận diện
-            f.with_suffix(".html").write_text(await self.page.content(),
-                                              encoding="utf-8")
-        except Exception:
-            pass
+        f = await save_debug(self.page)
+        shot = f" Ảnh chụp màn hình lúc lỗi: {f}" if f else ""
         return explain_page_problem(info) + shot
 
     async def open_conversation(self, url: str) -> None:
@@ -285,8 +315,9 @@ class AioSession:
     # ------------------------------------------------------------------ #
     async def upload_images(self, paths: List[Path], timeout_ms: int = 60000) -> int:
         paths = [str(Path(p)) for p in paths]
+        self._log(f"tải {len(paths)} ảnh lên")
         before = await self._count_thumbnails()
-        await self.page.locator(SEL_FILE_INPUT).first.set_input_files(paths)
+        await self._set_files(paths)
         target = before + len(paths)
         deadline = time.time() + timeout_ms / 1000
         while time.time() < deadline:
@@ -297,6 +328,32 @@ class AioSession:
                 return await self._count_thumbnails()
             await self.page.wait_for_timeout(300)
         return await self._count_thumbnails()
+
+    async def _set_files(self, paths: List[str]) -> None:
+        """Đưa file vào ChatGPT. Ưu tiên ô chọn file ẩn có sẵn; giao diện không
+        có thì bấm nút '+'/đính kèm (và mục 'ảnh/tệp' trong menu) để mở hộp
+        chọn file rồi nạp file vào đó."""
+        inp = self.page.locator(SEL_FILE_INPUT)
+        if await inp.count() > 0:
+            await inp.first.set_input_files(paths, timeout=15000)
+            return
+        self._log("không có ô chọn file sẵn → bấm nút đính kèm")
+        btn = self.page.locator(SEL_ATTACH_BTN).first
+        try:
+            async with self.page.expect_file_chooser(timeout=4000) as fc:
+                await btn.click(timeout=8000)
+            await (await fc.value).set_files(paths)
+            return
+        except PWTimeout:
+            pass
+        # nút '+' mở menu → bấm mục ảnh/tệp; hoặc menu đã tạo ra ô chọn file
+        inp = self.page.locator(SEL_FILE_INPUT)
+        if await inp.count() > 0:
+            await inp.first.set_input_files(paths, timeout=15000)
+            return
+        async with self.page.expect_file_chooser(timeout=8000) as fc:
+            await self.page.locator(SEL_ATTACH_ITEM).first.click(timeout=8000)
+        await (await fc.value).set_files(paths)
 
     async def _count_thumbnails(self) -> int:
         try:
@@ -315,6 +372,7 @@ class AioSession:
         chính xác, không cần quyền clipboard. Có kiểm tra + fallback.
         """
         clean = " ".join(text.split())
+        self._log(f"gõ prompt ({len(clean)} ký tự)")
         await self._click_composer()
         await self.page.evaluate(
             """(text) => {
@@ -384,6 +442,7 @@ class AioSession:
         Chờ nút gửi SẴN SÀNG (tức ảnh đã upload xong) rồi mới bấm; sau khi bấm
         kiểm tra ô soạn đã trống → chắc chắn tin đã đi. Thử lại vài lần. Nhờ vậy
         không còn cảnh 'gõ xong mà không gửi được → treo mãi'."""
+        self._log("gửi tin nhắn")
         self._net_mark = self._net_done   # mốc để biết luồng trả lời NÀY đã xong
         self.http_error = 0               # lỗi cũ không được ảnh hưởng lượt này
 
@@ -436,6 +495,7 @@ class AioSession:
             # caller retry, thay vì chờ mòn hết timeout rồi trả rỗng.
             raise SendError("Không gửi được tin nhắn (nút gửi không sẵn sàng).")
 
+        self._log("chờ ChatGPT trả lời")
         end = time.time() + timeout_ms / 1000
         # (1) chờ có LƯỢT TRẢ LỜI MỚI
         while time.time() < end:
@@ -534,6 +594,7 @@ class AioSession:
 
     async def wait_for_image(self, timeout_ms: int = 180000, poll_ms: int = 600,
                              baseline: Optional[set] = None) -> Optional[str]:
+        self._log("chờ ChatGPT vẽ ảnh")
         base = set(baseline or ())
         deadline = time.time() + timeout_ms / 1000
         await self._wait_generation_started(max_s=20, base=base)

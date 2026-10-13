@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from core.aio_browser import AioBrowser
-from core.aio_chatgpt import AioSession, StopRequested
+from core.aio_chatgpt import AioSession, StopRequested, save_debug
 from core.analyzer import (
     analyze, make_prompts, make_seo, generate_seo, PROMPT_SHARDS,
 )
@@ -37,6 +37,26 @@ def _emit(cb: ProgressCB, event: str, data: dict) -> None:
             cb(event, data)
         except Exception:
             pass
+
+
+def _session(page, cancel=None, progress: ProgressCB = None, tag: str = "") -> AioSession:
+    """Tạo AioSession + nối nhật ký TỪNG BƯỚC (mở chat / tải ảnh / gõ / gửi...)
+    lên app → người dùng thấy rõ tool đang làm gì, kẹt ở đâu."""
+    s = AioSession(page)
+    s.cancel = cancel
+    if progress:
+        pre = f"[{tag}] " if tag else ""
+        s.on_step = lambda m: _emit(progress, "step", {"msg": pre + m})
+    return s
+
+
+async def _dump_on_error(page, progress: ProgressCB) -> None:
+    """Lỗi bất kỳ → lưu ảnh chụp + mã trang để chẩn đoán, báo đường dẫn lên app."""
+    if page is None:
+        return
+    f = await save_debug(page)
+    if f:
+        _emit(progress, "step", {"msg": f"đã lưu ảnh chụp + mã trang lúc lỗi: {f}"})
 
 
 # Số lần TẠO LẠI khi QC chấm sai sản phẩm (mỗi lần tốn thêm 1 lượt tạo ảnh).
@@ -214,23 +234,27 @@ async def make_prompts_pipeline(product: Path, types=None,
         await br.open_chatgpt(page0)
         if not await br.is_logged_in(page0, timeout_ms=20000):
             raise RuntimeError("Chưa đăng nhập ChatGPT.")
-        s0 = AioSession(page0)
-        s0.cancel = cancel
+        s0 = _session(page0, cancel, progress, "tab 1")
         # Mở sẵn vài tab phụ để CHIA NHỎ việc sinh prompt chạy song song.
         extra = []
         n_extra = min(PROMPT_SHARDS, max(1, len(types) // 2)) - 1
-        for _ in range(max(0, n_extra)):
+        for i in range(max(0, n_extra)):
             try:
-                s = AioSession(await br.new_page())
-                s.cancel = cancel
-                extra.append(s)
+                extra.append(_session(await br.new_page(), cancel, progress,
+                                      f"tab {i + 2}"))
             except Exception:
                 break
         _emit(progress, "analyze_start", {})
-        res = await make_prompts(s0, product, types, language, product_info,
-                                 shop, market, has_person=has_person,
-                                 has_scene=has_scene, extra_sessions=extra,
-                                 product_extra=product_extra)
+        try:
+            res = await make_prompts(s0, product, types, language, product_info,
+                                     shop, market, has_person=has_person,
+                                     has_scene=has_scene, extra_sessions=extra,
+                                     product_extra=product_extra)
+        except StopRequested:
+            raise
+        except Exception:
+            await _dump_on_error(page0, progress)
+            raise
         res["prompts"] = _filter_prompts(res["prompts"], types, quantity)
         _emit(progress, "analyze_done", {"n_prompts": len(res["prompts"])})
         return res
@@ -252,10 +276,15 @@ async def make_seo_pipeline(product: Path, product_info: str = "", shop: str = "
         await br.open_chatgpt(page0)
         if not await br.is_logged_in(page0, timeout_ms=20000):
             raise RuntimeError("Chưa đăng nhập ChatGPT.")
-        s0 = AioSession(page0)
-        s0.cancel = cancel
+        s0 = _session(page0, cancel, progress)
         _emit(progress, "seo_start", {})
-        res = await make_seo(s0, product, product_info, shop, market, language)
+        try:
+            res = await make_seo(s0, product, product_info, shop, market, language)
+        except StopRequested:
+            raise
+        except Exception:
+            await _dump_on_error(page0, progress)
+            raise
         _emit(progress, "seo_done", {})
         return res
     finally:
@@ -300,13 +329,10 @@ async def _batch_account(br, page0, items, product, person, scene, attributes,
     Trả (done, remaining, limit). Raise StopRequested nếu user hủy."""
     conc = max(1, min(concurrency, len(items)))
     pool: asyncio.Queue = asyncio.Queue()
-    sess0 = AioSession(page0)
-    sess0.cancel = cancel
-    pool.put_nowait(sess0)
-    for _ in range(conc - 1):
-        s = AioSession(await br.new_page())
-        s.cancel = cancel
-        pool.put_nowait(s)
+    pool.put_nowait(_session(page0, cancel, progress, "tab 1"))
+    for i in range(conc - 1):
+        pool.put_nowait(_session(await br.new_page(), cancel, progress,
+                                 f"tab {i + 2}"))
     q: asyncio.Queue = asyncio.Queue()
     for it in items:
         q.put_nowait(it)
@@ -419,6 +445,7 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
             user_stopped = True
             break
         _emit(progress, "account", {"profile": prof_name, "remaining": len(remaining)})
+        page0 = None
         br = AioBrowser(hidden=hidden,
                         **({"profile_dir": profile_dir} if profile_dir else {}))
         try:
@@ -442,8 +469,7 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
 
                     async def _seo_job(attrs=attributes):
                         seo_page = await br.new_page()
-                        ss = AioSession(seo_page)
-                        ss.cancel = cancel
+                        ss = _session(seo_page, cancel, progress, "SEO")
                         try:
                             await ss.new_chat()
                             return await generate_seo(ss, attrs, shop, market,
@@ -460,8 +486,7 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
                     # ảnh cũng cần thuộc tính đó → giữ tuần tự.
                     try:
                         seo_page = await br.new_page()
-                        ss = AioSession(seo_page)
-                        ss.cancel = cancel
+                        ss = _session(seo_page, cancel, progress, "SEO")
                         r = await make_seo(ss, product, product_info, shop,
                                            market, language)
                         if isinstance(r, dict):
@@ -505,6 +530,7 @@ async def generate_from_prompts(prompts, product: Path, person=None, scene=None,
         except Exception as e:
             _emit(progress, "account_error",
                   {"profile": prof_name, "error": repr(e)})
+            await _dump_on_error(page0, progress)
         finally:
             await br.close()
 
@@ -741,6 +767,7 @@ async def batch_edit_images(images, edit_prompt: str, ratio: str = "",
             user_stopped = True
             break
         _emit(progress, "account", {"profile": prof_name, "remaining": len(remaining)})
+        page0 = None
         br = AioBrowser(hidden=hidden,
                         **({"profile_dir": profile_dir} if profile_dir else {}))
         try:
@@ -764,6 +791,7 @@ async def batch_edit_images(images, edit_prompt: str, ratio: str = "",
         except Exception as e:
             _emit(progress, "account_error",
                   {"profile": prof_name, "error": repr(e)})
+            await _dump_on_error(page0, progress)
         finally:
             await br.close()
 
