@@ -313,7 +313,7 @@ class AioSession:
         await self.page.wait_for_timeout(600)
 
     # ------------------------------------------------------------------ #
-    async def upload_images(self, paths: List[Path], timeout_ms: int = 60000) -> int:
+    async def upload_images(self, paths: List[Path], timeout_ms: int = 20000) -> int:
         paths = [str(Path(p)) for p in paths]
         self._log(f"tải {len(paths)} ảnh lên")
         before = await self._count_thumbnails()
@@ -327,15 +327,16 @@ class AioSession:
                 await self.page.wait_for_timeout(250)
                 return await self._count_thumbnails()
             await self.page.wait_for_timeout(300)
+        # Không thấy ảnh xem trước kiểu cũ (giao diện mới có thể khác) → vẫn đi
+        # tiếp; send() sẽ CHỜ nút gửi sẵn sàng (tức upload xong) mới bấm.
+        self._log("chưa thấy ảnh xem trước — vẫn tiếp tục")
         return await self._count_thumbnails()
 
     async def _set_files(self, paths: List[str]) -> None:
         """Đưa file vào ChatGPT. Ưu tiên ô chọn file ẩn có sẵn; giao diện không
         có thì bấm nút '+'/đính kèm (và mục 'ảnh/tệp' trong menu) để mở hộp
         chọn file rồi nạp file vào đó."""
-        inp = self.page.locator(SEL_FILE_INPUT)
-        if await inp.count() > 0:
-            await inp.first.set_input_files(paths, timeout=15000)
+        if await self._fill_file_input(paths):
             return
         self._log("không có ô chọn file sẵn → bấm nút đính kèm")
         btn = self.page.locator(SEL_ATTACH_BTN).first
@@ -347,13 +348,48 @@ class AioSession:
         except PWTimeout:
             pass
         # nút '+' mở menu → bấm mục ảnh/tệp; hoặc menu đã tạo ra ô chọn file
-        inp = self.page.locator(SEL_FILE_INPUT)
-        if await inp.count() > 0:
-            await inp.first.set_input_files(paths, timeout=15000)
+        if await self._fill_file_input(paths):
             return
         async with self.page.expect_file_chooser(timeout=8000) as fc:
             await self.page.locator(SEL_ATTACH_ITEM).first.click(timeout=8000)
         await (await fc.value).set_files(paths)
+
+    async def _fill_file_input(self, paths: List[str]) -> bool:
+        """Nạp file vào ĐÚNG ô chọn file ẩn. Trả False nếu trang không có ô nào.
+
+        Giao diện mới có NHIỀU ô: ô đầu tiên thường là 'Take a photo' (camera,
+        chỉ nhận 1 file) → nạp nhiều ảnh vào đó bị từ chối ('Non-multiple file
+        input can only accept single file'). Ưu tiên ô nhận NHIỀU file và không
+        phải camera; chỉ có ô 1 file thì nạp TỪNG ảnh một."""
+        inputs = self.page.locator(SEL_FILE_INPUT)
+        n = await inputs.count()
+        if n == 0:
+            return False
+        best, best_score = None, -1
+        for i in range(n):
+            el = inputs.nth(i)
+            try:
+                info = await el.evaluate(
+                    "e => ({m: !!e.multiple, c: e.hasAttribute('capture'),"
+                    " a: (e.accept || '').toLowerCase()})")
+            except Exception:
+                continue
+            acc = info.get("a", "")
+            score = (4 if info.get("m") else 0) + (0 if info.get("c") else 2) \
+                + (1 if (not acc or "image" in acc or "*" in acc) else 0)
+            if score > best_score:
+                best, best_score = el, score
+        if best is None:
+            return False
+        multiple = await best.evaluate("e => !!e.multiple")
+        if multiple or len(paths) == 1:
+            await best.set_input_files(paths, timeout=15000)
+        else:
+            self._log("ô chọn file chỉ nhận 1 ảnh → tải lần lượt từng ảnh")
+            for pth in paths:
+                await best.set_input_files([pth], timeout=15000)
+                await self.page.wait_for_timeout(400)
+        return True
 
     async def _count_thumbnails(self) -> int:
         try:

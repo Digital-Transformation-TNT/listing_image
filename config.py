@@ -94,7 +94,7 @@ INPUT_XLSX = DATA_DIR / "input.xlsx"     # danh sách job
 OUTPUT_DIR = BASE_DIR / "ket_qua"
 
 # Phiên bản hiện trên tiêu đề cửa sổ — để biết người dùng đang chạy bản nào.
-APP_VERSION = "2026.10.13-c"
+APP_VERSION = "2026.10.14-a"
 
 # ChatGPT
 CHATGPT_URL = "https://chatgpt.com/"

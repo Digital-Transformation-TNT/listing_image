@@ -153,6 +153,52 @@ UPLOAD_UI = {
 }
 
 
+# Nhiều ô chọn file ẩn: ô ĐẦU là camera 1 file ('Take a photo') — lỗi thật 14/10.
+INPUT_UI = {
+    "camera_first": '<input id="cam" type="file" class="hidden" accept="image/*" '
+                    'capture="environment" aria-label="Take a photo">'
+                    '<input id="multi" type="file" multiple accept="image/*">',
+    "single_only": '<input id="one" type="file" accept="image/*">',
+}
+
+
+async def run_inputs():
+    import tempfile
+    exe = "/opt/pw-browsers/chromium"
+    tmp = Path(tempfile.mkdtemp())
+    files = []
+    for n in ("a.png", "b.png", "c.png"):
+        f = tmp / n
+        f.write_bytes(b"x")
+        files.append(f)
+    async with async_playwright() as p:
+        kw = {"executable_path": exe} if os.path.exists(exe) else {}
+        b = await p.chromium.launch(**kw)
+        try:
+            for kind, html in INPUT_UI.items():
+                page = await b.new_page()
+                await page.set_content(html)
+                await page.evaluate("() => document.querySelectorAll('input').forEach(i => {"
+                                    "i.onchange = () => { window.__got = (window.__got || [])"
+                                    ".concat([i.id + ':' + i.files.length]); }; })")
+                s = AioSession(page)
+                err = ""
+                try:
+                    await s.upload_images(files, timeout_ms=300)
+                except Exception as e:
+                    err = repr(e)
+                got = await page.evaluate("() => window.__got || []")
+                if kind == "camera_first":
+                    check("bỏ qua ô camera, nạp 3 ảnh vào ô nhiều file",
+                          got == ["multi:3"] and not err, f"{got} {err}")
+                else:
+                    check("chỉ có ô 1 file → nạp lần lượt 3 lần",
+                          got == ["one:1"] * 3 and not err, f"{got} {err}")
+                await page.close()
+        finally:
+            await b.close()
+
+
 async def run_upload():
     import tempfile
     exe = "/opt/pw-browsers/chromium"
@@ -187,5 +233,6 @@ async def run_upload():
 asyncio.run(run())
 asyncio.run(run_new_ui())
 asyncio.run(run_upload())
+asyncio.run(run_inputs())
 print(f"\n==> {len(PASS)} passed, {len(FAIL)} failed / {len(PASS) + len(FAIL)} total")
 sys.exit(1 if FAIL else 0)
